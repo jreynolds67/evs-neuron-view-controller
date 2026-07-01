@@ -336,7 +336,7 @@ function openConfirm() {
   // Compact one-line summary so the dialog fits the short strip panels.
   $('confirmLines').innerHTML = '<div class="confirm-summary"></div>';
   $('confirmLines').querySelector('.confirm-summary').textContent =
-    `Load "${state.snap.name}" onto ${state.head.name}?`;
+    `Load "${state.srcHead.name || state.srcHead.uuid}" onto ${state.head.name}?`;
   $('overlay').classList.add('show');
 }
 

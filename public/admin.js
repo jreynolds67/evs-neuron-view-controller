@@ -253,6 +253,52 @@ $('addPanel').addEventListener('click', () => {
 $('reload').addEventListener('click', loadConfig);
 $('save').addEventListener('click', saveConfig);
 
+// ---- Export / import backup ----------------------------------------------
+
+$('exportBtn').addEventListener('click', () => {
+  // Snapshot the current editor state (includes any unsaved edits) as a backup file.
+  const data = JSON.stringify(config, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `neuron-mv-config-${ts}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast('Backup exported', 'ok');
+});
+
+$('importBtn').addEventListener('click', () => $('importFile').click());
+
+$('importFile').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // allow re-importing the same file later
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    // Validate the essential shape before accepting.
+    if (!parsed || !Array.isArray(parsed.cards) || !Array.isArray(parsed.panels)) {
+      throw new Error('File is missing cards[] or panels[]');
+    }
+    if (!confirm('Replace the current editor contents with this backup? '
+      + 'Nothing is saved to the server until you click "Save config".')) return;
+
+    config = parsed;
+    config.cards ||= []; config.panels ||= [];
+    config.settings ||= { showUuids: true };
+    $('showUuids').checked = config.settings.showUuids !== false;
+    renderCards(); renderPanels();
+    $('saveState').textContent = 'Imported — review and Save config to apply';
+    toast('Backup loaded into editor. Review, then Save config.', 'ok');
+  } catch (err) {
+    toast('Import failed: ' + err.message, 'err');
+  }
+});
+
 // ---- Board API activity log ----------------------------------------------
 
 let lastLogId = 0;
