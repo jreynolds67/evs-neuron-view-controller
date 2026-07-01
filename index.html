@@ -612,14 +612,7 @@
     ws.addEventListener("open", () => {
       setTally(id, "ok");
       logFeed(id, "connected");
-      // pull fresh state once the live channel is up
       refreshSnapshots(id);
-      api(b.host, "GET", "/v1/self").then(self => {
-        const sub = document.getElementById("sub-" + id);
-        if(sub && self && self.app){
-          sub.textContent = b.host + " · " + (self.app.productName || "Neuron MV");
-        }
-      }).catch(()=>{});
     });
 
     ws.addEventListener("message", (ev) => {
@@ -661,11 +654,35 @@
 
   // ---------- board lifecycle ----------
 
+  const POLL_INTERVAL_MS = 15000;
+
+  function initBoardRest(id){
+    const b = boards[id];
+    if(!b) return;
+    // Always fetch over REST on load/add, independent of WebSocket state —
+    // the panel should remain useful even if the live feed never connects.
+    refreshSnapshots(id);
+    api(b.host, "GET", "/v1/self").then(self => {
+      const sub = document.getElementById("sub-" + id);
+      if(sub && self && self.app){
+        sub.textContent = b.host + " · " + (self.app.productName || "Neuron MV");
+      }
+      setBoardError(id, null);
+    }).catch(err => {
+      setBoardError(id, "REST API unreachable: " + err.message);
+    });
+
+    runtime[id] = runtime[id] || {};
+    clearInterval(runtime[id].pollTimer);
+    runtime[id].pollTimer = setInterval(() => refreshSnapshots(id), POLL_INTERVAL_MS);
+  }
+
   function addBoard(name, host){
     const id = uuid();
     boards[id] = { id, name, host };
     saveBoards();
     renderBoards();
+    initBoardRest(id);
     connectWs(id);
   }
 
@@ -673,6 +690,7 @@
     if(runtime[id]){
       clearTimeout(runtime[id].reconnectTimer);
       clearTimeout(runtime[id].refreshTimer);
+      clearInterval(runtime[id].pollTimer);
       if(runtime[id].ws){ try{ runtime[id].ws.close(); }catch(e){} }
       delete runtime[id];
     }
@@ -683,7 +701,10 @@
 
   function initAllBoards(){
     renderBoards();
-    Object.keys(boards).forEach(id => connectWs(id));
+    Object.keys(boards).forEach(id => {
+      initBoardRest(id);
+      connectWs(id);
+    });
   }
 
   // ---------- modals ----------
