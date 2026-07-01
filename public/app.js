@@ -287,24 +287,6 @@ function renderSourceHeads(heads) {
   $('stageHint').textContent = `${state.snap.name} → ${state.head.name}`;
   grid.innerHTML = '';
 
-  // Comparison header: what's currently on the target head (live) for reference.
-  const compare = document.createElement('div');
-  compare.className = 'compare-live';
-  compare.innerHTML = `
-    <div class="compare-col">
-      <div class="compare-cap">On air now — ${state.head.name}</div>
-      <div class="compare-prev" data-live></div>
-    </div>`;
-  grid.appendChild(compare);
-  loadPreviewInto(
-    compare.querySelector('[data-live]'),
-    `/api/panel/cards/${state.card.id}/heads/${state.head.uuid}/preview`);
-
-  const sub = document.createElement('div');
-  sub.className = 'group-head';
-  sub.textContent = 'Snapshot source heads — tap to load';
-  grid.appendChild(sub);
-
   heads.slice().sort(byName).forEach((h) => {
     const card = document.createElement('button');
     card.className = 'card card-with-preview' + (state.srcHead?.uuid === h.uuid ? ' selected' : '');
