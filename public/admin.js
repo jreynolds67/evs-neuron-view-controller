@@ -2,6 +2,10 @@
 let config = { cards: [], panels: [] };
 const $ = (id) => document.getElementById(id);
 
+// Natural alphanumeric sort ("2 Boxes" < "9 Boxes" < "10 Boxes").
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const byName = (a, b) => collator.compare(a.name || '', b.name || '');
+
 function token() { return $('token').value.trim(); }
 function headers() {
   const h = { 'Content-Type': 'application/json' };
@@ -62,11 +66,6 @@ function renderCards() {
 $('addCard').addEventListener('click', () => {
   const n = config.cards.length + 1;
   config.cards.push({ id: `mv${n}`, label: `MV Card ${n}`, ip: '' });
-  renderCards(); renderPanels();
-});
-$('seed12').addEventListener('click', () => {
-  if (config.cards.length && !confirm('Replace current cards with 12 blank cards?')) return;
-  config.cards = Array.from({ length: 12 }, (_, i) => ({ id: `mv${i + 1}`, label: `MV Card ${i + 1}`, ip: '' }));
   renderCards(); renderPanels();
 });
 
@@ -170,14 +169,27 @@ async function probePanel(pi) {
     wrap.innerHTML = `<div style="font-weight:600;margin-bottom:6px">${card?.label || cardId}</div>`;
     if (error) { wrap.innerHTML += `<div class="muted" style="color:var(--danger)">${error}</div>`; out.appendChild(wrap); return; }
 
-    heads.forEach((h) => {
+    const sortedHeads = heads.slice().sort(byName);
+    const sortedSnaps = snaps.slice().sort(byName);
+
+    sortedHeads.forEach((h) => {
       const key = `${cardId}::${h.uuid}`;
       const selected = p.snapshotFilters[key] || null;
-      const hd = document.createElement('div');
-      hd.style.margin = '8px 0';
-      hd.innerHTML = `<div class="muted">Head: <b>${h.name || h.uuid}</b> — ${selected ? selected.length + ' allowed' : 'all allowed'}</div>`;
+
+      // Collapsible per-head section. Collapsed by default to keep the page readable.
+      const det = document.createElement('details');
+      det.className = 'head-filter';
+      const sum = document.createElement('summary');
+      const countText = () => {
+        const arr = p.snapshotFilters[key];
+        return arr && arr.length ? `${arr.length} allowed` : 'all allowed';
+      };
+      sum.innerHTML = `<span class="hf-name">${h.name || h.uuid}</span> <span class="hf-count muted"></span>`;
+      sum.querySelector('.hf-count').textContent = `— ${countText()}`;
+      det.appendChild(sum);
+
       const list = document.createElement('div'); list.className = 'snaplist';
-      snaps.forEach((s) => {
+      sortedSnaps.forEach((s) => {
         const id = `f-${pi}-${cardId}-${h.uuid}-${s.uuid}`;
         const checked = selected ? selected.includes(s.uuid) : false;
         const lab = document.createElement('label');
@@ -186,11 +198,12 @@ async function probePanel(pi) {
           let arr = p.snapshotFilters[key] ? [...p.snapshotFilters[key]] : [];
           if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
           if (arr.length) p.snapshotFilters[key] = arr; else delete p.snapshotFilters[key];
+          sum.querySelector('.hf-count').textContent = `— ${countText()}`;
         });
         list.appendChild(lab);
       });
-      hd.appendChild(list);
-      wrap.appendChild(hd);
+      det.appendChild(list);
+      wrap.appendChild(det);
     });
     out.appendChild(wrap);
   });

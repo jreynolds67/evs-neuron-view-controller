@@ -14,6 +14,10 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const grid = $('grid');
 
+// Natural alphanumeric sort so "2 Boxes" < "9 Boxes" < "10 Boxes" (not lexical).
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const byName = (a, b) => collator.compare(a.name || '', b.name || '');
+
 function toast(msg, kind = '') {
   const t = $('toast');
   t.textContent = msg;
@@ -87,6 +91,7 @@ async function renderHeads() {
     const heads = await api(`/api/panel/cards/${state.card.id}/heads`);
     grid.innerHTML = '';
     if (!heads.length) return showEmpty('No heads reported by this card.');
+    heads.sort(byName);
     heads.forEach((h) => {
       grid.appendChild(cardEl({
         k: h.name || 'Head', uuid: h.uuid,
@@ -118,7 +123,8 @@ async function renderSnapshots() {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(s);
     });
-    const orderedKeys = [...groups.keys()].sort();
+    // Group keys sorted naturally; keep Ungrouped last via its sentinel prefix.
+    const orderedKeys = [...groups.keys()].sort((a, b) => collator.compare(a, b));
 
     orderedKeys.forEach((key) => {
       const label = key === '\uffffUngrouped' ? 'Ungrouped' : key;
@@ -126,7 +132,7 @@ async function renderSnapshots() {
       header.className = 'group-head';
       header.textContent = label;
       grid.appendChild(header);
-      groups.get(key).forEach((s) => {
+      groups.get(key).sort(byName).forEach((s) => {
         const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
         grid.appendChild(cardEl({
           k: s.name, v: [s.description, when].filter(Boolean).join('  ·  '),
@@ -161,7 +167,7 @@ function renderSourceHeads(heads) {
   $('stageTitle').textContent = 'Select source head in snapshot';
   $('stageHint').textContent = `${state.snap.name} → ${state.head.name}`;
   grid.innerHTML = '';
-  heads.forEach((h) => {
+  heads.slice().sort(byName).forEach((h) => {
     grid.appendChild(cardEl({
       k: h.name || 'Head', uuid: h.uuid,
       selected: state.srcHead?.uuid === h.uuid,
