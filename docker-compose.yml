@@ -11,7 +11,7 @@ services:
       # Set a token to protect the admin API/page. Leave unset to keep admin open
       # (only do that on a trusted, isolated control network).
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
-      PORT: "8080"
+      PORT: "8001"
       CONFIG_PATH: /data/config.json
     volumes:
       - neuron_config:/data
