@@ -1,0 +1,7 @@
+services:
+  evs-mv-control:
+    build: .
+    container_name: evs-mv-control
+    ports:
+      - "8080:80"
+    restart: unless-stopped

@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neuron MV — Snapshot Control</title>
+<style>
+  :root{
+    --bg:#0a0c0f;
+    --panel:#14171c;
+    --panel-raised:#1b1f26;
+    --line:#262b33;
+    --text:#eceef1;
+    --text-dim:#8b93a1;
+    --text-faint:#565d68;
+    --tally-green:#3fbf6f;
+    --tally-green-dim:#1d3d2b;
+    --tally-red:#e8383d;
+    --tally-red-dim:#3d1e1f;
+    --tally-amber:#e8a33d;
+    --tally-amber-dim:#3d321d;
+    --accent:#4a9eff;
+    --mono: "SF Mono","Cascadia Code","Consolas","DejaVu Sans Mono",monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, #131722 0%, transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+  }
+  header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:20px 28px;
+    border-bottom:1px solid var(--line);
+    position:sticky; top:0; z-index:20;
+    background:rgba(10,12,15,0.92);
+    backdrop-filter:blur(6px);
+  }
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand-mark{
+    width:10px;height:10px;border-radius:50%;
+    background:var(--tally-green);
+    box-shadow:0 0 8px 2px rgba(63,191,111,0.55);
+    flex-shrink:0;
+  }
+  h1{font-size:15px; font-weight:600; letter-spacing:0.02em; margin:0;}
+  h1 span{color:var(--text-dim); font-weight:400;}
+  .add-btn{
+    background:var(--panel-raised);
+    border:1px solid var(--line);
+    color:var(--text);
+    padding:9px 16px;
+    border-radius:6px;
+    font-size:13px;
+    font-family:var(--sans);
+    cursor:pointer;
+    display:flex; align-items:center; gap:7px;
+    transition:border-color .15s, background .15s;
+  }
+  .add-btn:hover{border-color:var(--accent); background:#1e2430;}
+  .add-btn:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
+
+  main{padding:28px; max-width:1400px; margin:0 auto;}
+  .empty-state{
+    text-align:center; padding:100px 20px; color:var(--text-dim);
+  }
+  .empty-state .glyph{font-family:var(--mono); font-size:28px; color:var(--text-faint); margin-bottom:14px;}
+  .empty-state button{
+    margin-top:18px; background:var(--accent); color:#04101f; border:none;
+    padding:10px 20px; border-radius:6px; font-weight:600; cursor:pointer; font-size:13px;
+  }
+
+  .boards{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(420px, 1fr));
+    gap:20px;
+  }
+
+  .board{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+    display:flex; flex-direction:column;
+  }
+  .board-head{
+    display:flex; align-items:flex-start; justify-content:space-between;
+    padding:16px 18px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, var(--panel-raised), var(--panel));
+  }
+  .board-id{display:flex; gap:12px; align-items:flex-start; min-width:0;}
+  .tally{
+    width:11px;height:11px;border-radius:50%;
+    margin-top:4px; flex-shrink:0;
+    background:var(--text-faint);
+    transition:background .2s, box-shadow .2s;
+  }
+  .tally.ok{background:var(--tally-green); box-shadow:0 0 7px 2px rgba(63,191,111,.6);}
+  .tally.warn{background:var(--tally-amber); box-shadow:0 0 7px 2px rgba(232,163,61,.6); animation:pulse 1.4s infinite;}
+  .tally.bad{background:var(--tally-red); box-shadow:0 0 7px 2px rgba(232,56,61,.55);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+  .board-name{font-size:14px; font-weight:600; line-height:1.3;}
+  .board-sub{font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:3px; word-break:break-all;}
+  .board-actions{display:flex; gap:6px; flex-shrink:0;}
+  .icon-btn{
+    background:transparent; border:1px solid var(--line); color:var(--text-dim);
+    width:28px; height:28px; border-radius:6px; cursor:pointer; font-size:13px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .icon-btn:hover{color:var(--text); border-color:var(--text-faint);}
+
+  .board-body{padding:16px 18px 18px; display:flex; flex-direction:column; gap:16px;}
+
+  .storage-row{display:flex; flex-direction:column; gap:6px;}
+  .storage-label{display:flex; justify-content:space-between; font-size:11px; color:var(--text-dim); font-family:var(--mono);}
+  .meter{height:5px; background:var(--panel-raised); border-radius:3px; overflow:hidden; border:1px solid var(--line);}
+  .meter-fill{height:100%; background:linear-gradient(90deg,var(--accent),#7bc4ff); transition:width .3s;}
+  .state-line{font-size:11px; font-family:var(--mono); color:var(--text-dim); display:flex; align-items:center; gap:6px;}
+  .state-line.busy{color:var(--tally-amber);}
+  .err-line{font-size:11px; color:var(--tally-red); font-family:var(--mono);}
+
+  .section-title{
+    font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .mini-btn{
+    background:var(--panel-raised); border:1px solid var(--line); color:var(--text);
+    font-size:11px; padding:5px 10px; border-radius:5px; cursor:pointer; font-family:var(--sans);
+  }
+  .mini-btn:hover{border-color:var(--accent);}
+  .mini-btn.primary{background:var(--accent); color:#04101f; border-color:var(--accent); font-weight:600;}
+
+  .snap-list{display:flex; flex-direction:column; gap:6px; max-height:340px; overflow-y:auto; padding-right:2px;}
+  .snap-list::-webkit-scrollbar{width:6px;}
+  .snap-list::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
+  .snap-empty{font-size:12px; color:var(--text-faint); padding:14px 0; text-align:center; font-family:var(--mono);}
+
+  .snap-item{
+    background:var(--panel-raised);
+    border:1px solid var(--line);
+    border-radius:7px;
+    padding:10px 12px;
+  }
+  .snap-top{display:flex; justify-content:space-between; align-items:center; gap:10px;}
+  .snap-name{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .snap-meta{font-size:10.5px; font-family:var(--mono); color:var(--text-dim); margin-top:3px; display:flex; gap:10px; flex-wrap:wrap;}
+  .snap-desc{font-size:11.5px; color:var(--text-dim); margin-top:5px;}
+  .snap-actions{display:flex; gap:5px; margin-top:8px;}
+  .snap-actions button{
+    flex:1; background:transparent; border:1px solid var(--line); color:var(--text-dim);
+    font-size:11px; padding:6px 0; border-radius:5px; cursor:pointer; font-family:var(--sans);
+  }
+  .snap-actions button:hover{color:var(--text); border-color:var(--text-faint);}
+  .snap-actions button.danger:hover{color:var(--tally-red); border-color:var(--tally-red);}
+  .snap-actions button.go:hover{color:var(--tally-green); border-color:var(--tally-green);}
+
+  .feed-toggle{
+    font-size:10.5px; color:var(--text-faint); cursor:pointer; user-select:none;
+    font-family:var(--mono); display:flex; align-items:center; gap:5px;
+  }
+  .feed{
+    display:none; background:#07090b; border:1px solid var(--line); border-radius:6px;
+    padding:8px 10px; max-height:120px; overflow-y:auto; font-family:var(--mono); font-size:10px;
+    color:var(--text-dim); white-space:pre-wrap; word-break:break-all;
+  }
+  .feed.open{display:block;}
+  .feed-line{border-bottom:1px solid var(--line); padding:4px 0;}
+  .feed-line:last-child{border-bottom:none;}
+  .feed-line .t{color:var(--text-faint); margin-right:6px;}
+
+  /* Modal */
+  .overlay{
+    position:fixed; inset:0; background:rgba(4,5,7,0.72);
+    display:none; align-items:center; justify-content:center; z-index:100; padding:20px;
+  }
+  .overlay.open{display:flex;}
+  .modal{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    width:100%; max-width:420px; padding:22px; max-height:88vh; overflow-y:auto;
+  }
+  .modal h2{font-size:15px; margin:0 0 16px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:11.5px; color:var(--text-dim); margin-bottom:6px;}
+  .field input, .field textarea{
+    width:100%; background:var(--panel-raised); border:1px solid var(--line); color:var(--text);
+    padding:9px 10px; border-radius:6px; font-size:13px; font-family:var(--sans);
+  }
+  .field textarea{resize:vertical; min-height:60px;}
+  .field-hint{font-size:10.5px; color:var(--text-faint); margin-top:5px;}
+  .check-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; margin-bottom:16px;}
+  .check-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim);}
+  .check-row input{width:auto;}
+  .modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:6px;}
+  .btn{padding:9px 16px; border-radius:6px; font-size:13px; cursor:pointer; font-family:var(--sans); border:1px solid var(--line); background:transparent; color:var(--text);}
+  .btn.primary{background:var(--accent); color:#04101f; border-color:var(--accent); font-weight:600;}
+  .btn.danger{background:var(--tally-red); color:#1a0505; border-color:var(--tally-red); font-weight:600;}
+
+  .toast-wrap{position:fixed; bottom:20px; right:20px; display:flex; flex-direction:column; gap:8px; z-index:200;}
+  .toast{
+    background:var(--panel-raised); border:1px solid var(--line); border-left:3px solid var(--accent);
+    padding:10px 14px; border-radius:6px; font-size:12.5px; max-width:320px; box-shadow:0 6px 20px rgba(0,0,0,.4);
+  }
+  .toast.error{border-left-color:var(--tally-red);}
+  .toast.success{border-left-color:var(--tally-green);}
+
+  /* ---------- Compact strip mode (short/wide router-panel screens, e.g. 1895x291) ---------- */
+  @media (max-height: 420px){
+    body{overflow:hidden;}
+    header{padding:6px 12px;}
+    .brand-mark{width:8px; height:8px;}
+    h1{font-size:12px;}
+    h1 span{display:none;}
+    .add-btn{padding:5px 10px; font-size:11px;}
+
+    main{padding:6px 8px; max-width:none;}
+    .empty-state{padding:20px 10px;}
+
+    .boards{
+      display:flex;
+      flex-direction:row;
+      flex-wrap:nowrap;
+      overflow-x:auto;
+      overflow-y:hidden;
+      gap:8px;
+      height:calc(100vh - 46px);
+      padding-bottom:4px;
+    }
+    .boards::-webkit-scrollbar{height:6px;}
+    .boards::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
+
+    .board{
+      flex:0 0 300px;
+      height:100%;
+      max-height:100%;
+    }
+    .board-head{padding:7px 10px;}
+    .board-id{gap:8px;}
+    .tally{width:8px; height:8px; margin-top:2px;}
+    .board-name{font-size:11.5px;}
+    .board-sub{font-size:9px;}
+    .icon-btn{width:22px; height:22px; font-size:11px;}
+
+    .board-body{padding:7px 10px; gap:8px; overflow:hidden;}
+    .storage-label{font-size:9.5px;}
+    .state-line, .err-line{font-size:9.5px;}
+
+    .section-title{font-size:9px;}
+    .mini-btn{font-size:9.5px; padding:3px 7px;}
+
+    .snap-list{
+      flex-direction:row;
+      flex-wrap:nowrap;
+      overflow-x:auto;
+      overflow-y:hidden;
+      max-height:none;
+      padding-bottom:2px;
+    }
+    .snap-item{flex:0 0 170px; padding:6px 8px;}
+    .snap-name{font-size:11px;}
+    .snap-meta{font-size:9px; gap:6px;}
+    .snap-desc{display:none;}
+    .snap-actions button{font-size:9.5px; padding:4px 0;}
+
+    /* Live feed panel is a debugging tool; no room for it on the strip */
+    .feed-toggle, .feed{display:none;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <h1>Neuron MV <span>/ Snapshot Control</span></h1>
+  </div>
+  <button class="add-btn" id="openAddBoard">+ Add board</button>
+</header>
+
+<main>
+  <div id="emptyState" class="empty-state" style="display:none;">
+    <div class="glyph">&#9635;</div>
+    <div>No boards added yet.</div>
+    <button id="emptyAddBtn">Add your first board</button>
+  </div>
+  <div class="boards" id="boards"></div>
+</main>
+
+<!-- Add board modal -->
+<div class="overlay" id="addBoardOverlay">
+  <div class="modal">
+    <h2>Add board</h2>
+    <div class="field">
+      <label for="boardName">Label (e.g. PCR 101)</label>
+      <input id="boardName" type="text" placeholder="PCR 101">
+    </div>
+    <div class="field">
+      <label for="boardHost">Host / IP</label>
+      <input id="boardHost" type="text" placeholder="192.168.1.101">
+      <div class="field-hint">HTTP API is called at http://&lt;host&gt;/api/v1 and the live feed connects to ws://&lt;host&gt;</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="confirmAddBoard">Add board</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create snapshot modal -->
+<div class="overlay" id="createSnapOverlay">
+  <div class="modal">
+    <h2>Create snapshot</h2>
+    <div class="field">
+      <label for="snapName">Name</label>
+      <input id="snapName" type="text" placeholder="Pre-show baseline">
+    </div>
+    <div class="field">
+      <label for="snapDesc">Description</label>
+      <textarea id="snapDesc" placeholder="Optional notes"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="confirmCreateSnap">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit snapshot metadata modal -->
+<div class="overlay" id="editSnapOverlay">
+  <div class="modal">
+    <h2>Edit snapshot</h2>
+    <div class="field">
+      <label for="editSnapName">Name</label>
+      <input id="editSnapName" type="text">
+    </div>
+    <div class="field">
+      <label for="editSnapDesc">Description</label>
+      <textarea id="editSnapDesc"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="confirmEditSnap">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Restore modal -->
+<div class="overlay" id="restoreOverlay">
+  <div class="modal">
+    <h2>Restore snapshot</h2>
+    <div class="field-hint" style="margin-bottom:14px;" id="restoreTargetLabel"></div>
+    <div class="check-grid" id="restoreChecks"></div>
+    <div class="modal-actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn danger" id="confirmRestore">Restore now</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  const STORAGE_KEY = "evs-mv-boards-v1";
+  const RESTORE_FLAGS = [
+    ["restoreHeads","Heads"],
+    ["restoreInputs","Inputs"],
+    ["restoreOutputsSdi","SDI outputs"],
+    ["restoreOutputsIp","IP outputs"],
+    ["restoreGlobalSettings","Global settings"],
+    ["restoreReference","Reference"],
+    ["restoreImageVideo","Image/video"],
+    ["restoreNmos","NMOS"],
+    ["restorePatternGenerator","Pattern gen"],
+    ["restoreTSL","TSL"],
+    ["restoreAppearanceHeadTemplates","Head templates"],
+    ["restoreAppearanceWidgetTemplates","Widget templates"],
+  ];
+
+  /** @type {Record<string, {id:string,name:string,host:string}>} */
+  let boards = {};
+  /** live runtime state per board id, not persisted */
+  const runtime = {};
+
+  function loadBoards(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      boards = raw ? JSON.parse(raw) : {};
+    }catch(e){ boards = {}; }
+  }
+  function saveBoards(){
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(boards));
+  }
+
+  function toast(msg, kind){
+    const wrap = document.getElementById("toasts");
+    const el = document.createElement("div");
+    el.className = "toast" + (kind ? " " + kind : "");
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(()=>{ el.remove(); }, 4200);
+  }
+
+  function fmtBytes(n){
+    if(n === undefined || n === null) return "—";
+    const units = ["B","KB","MB","GB","TB"];
+    let i = 0, v = n;
+    while(v >= 1024 && i < units.length-1){ v /= 1024; i++; }
+    return v.toFixed(v < 10 && i>0 ? 1 : 0) + " " + units[i];
+  }
+  function fmtTime(unixSeconds){
+    if(!unixSeconds) return "—";
+    const d = new Date(unixSeconds * 1000);
+    return d.toLocaleString(undefined, {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+  }
+  function uuid(){
+    if(crypto.randomUUID) return crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c=>{
+      const r = Math.random()*16|0, v = c=="x"?r:(r&0x3|0x8);
+      return v.toString(16);
+    });
+  }
+
+  async function api(host, method, path, body){
+    const url = "http://" + host + "/api" + path;
+    const opts = { method, headers: {} };
+    if(body !== undefined){
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
+    let data = null;
+    try{ data = await res.json(); }catch(e){ /* empty body ok */ }
+    if(!res.ok){
+      const msg = (data && data.message) ? data.message : ("HTTP " + res.status);
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  // ---------- rendering ----------
+
+  function boardCardTemplate(b){
+    return `
+      <div class="board" data-board="${b.id}">
+        <div class="board-head">
+          <div class="board-id">
+            <div class="tally" id="tally-${b.id}" title="Live feed status"></div>
+            <div>
+              <div class="board-name">${escapeHtml(b.name)}</div>
+              <div class="board-sub" id="sub-${b.id}">${escapeHtml(b.host)}</div>
+            </div>
+          </div>
+          <div class="board-actions">
+            <button class="icon-btn" data-action="refresh" title="Refresh">&#8635;</button>
+            <button class="icon-btn" data-action="remove" title="Remove board">&#10005;</button>
+          </div>
+        </div>
+        <div class="board-body">
+          <div class="storage-row">
+            <div class="storage-label"><span id="state-${b.id}">connecting…</span><span id="storage-text-${b.id}">—</span></div>
+            <div class="meter"><div class="meter-fill" id="meter-${b.id}" style="width:0%"></div></div>
+            <div class="err-line" id="err-${b.id}" style="display:none;"></div>
+          </div>
+
+          <div>
+            <div class="section-title">
+              Snapshots
+              <button class="mini-btn primary" data-action="new-snapshot">+ New</button>
+            </div>
+            <div class="snap-list" id="snaps-${b.id}">
+              <div class="snap-empty">Loading…</div>
+            </div>
+          </div>
+
+          <div>
+            <div class="feed-toggle" data-action="toggle-feed">▸ Live feed (WebSocket)</div>
+            <div class="feed" id="feed-${b.id}"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function escapeHtml(s){
+    return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  function renderBoards(){
+    const container = document.getElementById("boards");
+    const empty = document.getElementById("emptyState");
+    const ids = Object.keys(boards);
+    if(ids.length === 0){
+      container.innerHTML = "";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    container.innerHTML = ids.map(id => boardCardTemplate(boards[id])).join("");
+  }
+
+  function setTally(id, state){
+    // state: 'ok' | 'warn' | 'bad'
+    const el = document.getElementById("tally-" + id);
+    if(!el) return;
+    el.classList.remove("ok","warn","bad");
+    el.classList.add(state);
+  }
+
+  function setBoardError(id, msg){
+    const el = document.getElementById("err-" + id);
+    if(!el) return;
+    if(msg){ el.style.display = "block"; el.textContent = msg; }
+    else { el.style.display = "none"; el.textContent = ""; }
+  }
+
+  // ---------- snapshot data ----------
+
+  async function refreshSnapshots(id){
+    const b = boards[id];
+    if(!b) return;
+    try{
+      const info = await api(b.host, "GET", "/v1/snapshots");
+      setBoardError(id, info.lastErrorMessage || null);
+      const stateEl = document.getElementById("state-" + id);
+      if(stateEl){
+        stateEl.textContent = info.state;
+        stateEl.parentElement.parentElement.querySelector(".state-line");
+      }
+      const busy = info.state && info.state !== "idle";
+      const stateLineParent = document.getElementById("state-" + id);
+      if(stateLineParent) stateLineParent.style.color = busy ? "var(--tally-amber)" : "var(--text-dim)";
+
+      const pct = info.totalStorageBytes ? Math.min(100, (info.usedStorageBytes / info.totalStorageBytes) * 100) : 0;
+      const meter = document.getElementById("meter-" + id);
+      if(meter) meter.style.width = pct.toFixed(1) + "%";
+      const storageText = document.getElementById("storage-text-" + id);
+      if(storageText) storageText.textContent = fmtBytes(info.usedStorageBytes) + " / " + fmtBytes(info.totalStorageBytes);
+
+      const uuids = info.snapshots || [];
+      const metas = await Promise.all(uuids.map(u =>
+        api(b.host, "GET", "/v1/snapshots/" + u).catch(() => null)
+      ));
+      const valid = metas.filter(Boolean).sort((a,bb) => (bb.timestamp||0) - (a.timestamp||0));
+      renderSnapshotList(id, valid);
+    }catch(e){
+      setBoardError(id, "Snapshot list failed: " + e.message);
+      const list = document.getElementById("snaps-" + id);
+      if(list) list.innerHTML = '<div class="snap-empty">Could not load snapshots</div>';
+    }
+  }
+
+  function renderSnapshotList(id, metas){
+    const list = document.getElementById("snaps-" + id);
+    if(!list) return;
+    if(metas.length === 0){
+      list.innerHTML = '<div class="snap-empty">No snapshots yet</div>';
+      return;
+    }
+    list.innerHTML = metas.map(m => `
+      <div class="snap-item" data-uuid="${m.uuid}">
+        <div class="snap-top">
+          <div class="snap-name" title="${escapeHtml(m.name)}">${escapeHtml(m.name || "(unnamed)")}</div>
+        </div>
+        <div class="snap-meta">
+          <span>${fmtTime(m.timestamp)}</span>
+          <span>${fmtBytes(m.sizeBytes)}</span>
+          ${m.shared ? "<span>shared</span>" : ""}
+        </div>
+        ${m.description ? `<div class="snap-desc">${escapeHtml(m.description)}</div>` : ""}
+        <div class="snap-actions">
+          <button class="go" data-action="restore">Restore</button>
+          <button data-action="edit">Rename</button>
+          <button class="danger" data-action="delete">Delete</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  // ---------- websocket ----------
+
+  function connectWs(id){
+    const b = boards[id];
+    if(!b) return;
+    if(runtime[id] && runtime[id].ws){
+      try{ runtime[id].ws.close(); }catch(e){}
+    }
+    runtime[id] = runtime[id] || {};
+    setTally(id, "warn");
+    let ws;
+    try{
+      ws = new WebSocket("ws://" + b.host);
+    }catch(e){
+      setTally(id, "bad");
+      setBoardError(id, "WebSocket error: " + e.message);
+      return;
+    }
+    runtime[id].ws = ws;
+
+    ws.addEventListener("open", () => {
+      setTally(id, "ok");
+      logFeed(id, "connected");
+      // pull fresh state once the live channel is up
+      refreshSnapshots(id);
+      api(b.host, "GET", "/v1/self").then(self => {
+        const sub = document.getElementById("sub-" + id);
+        if(sub && self && self.app){
+          sub.textContent = b.host + " · " + (self.app.productName || "Neuron MV");
+        }
+      }).catch(()=>{});
+    });
+
+    ws.addEventListener("message", (ev) => {
+      logFeed(id, ev.data);
+      // Message schema is undocumented — on any traffic, opportunistically
+      // refresh the snapshot panel so the UI stays in sync with device state.
+      // Cheap debounce so a burst of messages doesn't spam the API.
+      clearTimeout(runtime[id].refreshTimer);
+      runtime[id].refreshTimer = setTimeout(() => refreshSnapshots(id), 250);
+    });
+
+    ws.addEventListener("close", () => {
+      setTally(id, "bad");
+      logFeed(id, "disconnected — retrying in 4s");
+      clearTimeout(runtime[id].reconnectTimer);
+      runtime[id].reconnectTimer = setTimeout(() => connectWs(id), 4000);
+    });
+
+    ws.addEventListener("error", () => {
+      setTally(id, "bad");
+    });
+  }
+
+  function logFeed(id, raw){
+    const feed = document.getElementById("feed-" + id);
+    if(!feed) return;
+    const time = new Date().toLocaleTimeString();
+    let display = raw;
+    try{
+      const parsed = JSON.parse(raw);
+      display = JSON.stringify(parsed, null, 0);
+    }catch(e){ /* not json, show raw */ }
+    const line = document.createElement("div");
+    line.className = "feed-line";
+    line.innerHTML = `<span class="t">${time}</span>${escapeHtml(display)}`;
+    feed.prepend(line);
+    while(feed.children.length > 30) feed.removeChild(feed.lastChild);
+  }
+
+  // ---------- board lifecycle ----------
+
+  function addBoard(name, host){
+    const id = uuid();
+    boards[id] = { id, name, host };
+    saveBoards();
+    renderBoards();
+    connectWs(id);
+  }
+
+  function removeBoard(id){
+    if(runtime[id]){
+      clearTimeout(runtime[id].reconnectTimer);
+      clearTimeout(runtime[id].refreshTimer);
+      if(runtime[id].ws){ try{ runtime[id].ws.close(); }catch(e){} }
+      delete runtime[id];
+    }
+    delete boards[id];
+    saveBoards();
+    renderBoards();
+  }
+
+  function initAllBoards(){
+    renderBoards();
+    Object.keys(boards).forEach(id => connectWs(id));
+  }
+
+  // ---------- modals ----------
+
+  function openModal(elId){ document.getElementById(elId).classList.add("open"); }
+  function closeModal(elId){ document.getElementById(elId).classList.remove("open"); }
+
+  document.querySelectorAll(".overlay").forEach(ov => {
+    ov.addEventListener("click", (e) => {
+      if(e.target === ov) ov.classList.remove("open");
+    });
+    ov.querySelectorAll("[data-close]").forEach(btn => {
+      btn.addEventListener("click", () => ov.classList.remove("open"));
+    });
+  });
+
+  document.getElementById("openAddBoard").addEventListener("click", () => openModal("addBoardOverlay"));
+  document.getElementById("emptyAddBtn").addEventListener("click", () => openModal("addBoardOverlay"));
+
+  document.getElementById("confirmAddBoard").addEventListener("click", () => {
+    const name = document.getElementById("boardName").value.trim();
+    const host = document.getElementById("boardHost").value.trim();
+    if(!host){ toast("Enter a host / IP", "error"); return; }
+    addBoard(name || host, host);
+    document.getElementById("boardName").value = "";
+    document.getElementById("boardHost").value = "";
+    closeModal("addBoardOverlay");
+    toast("Board added", "success");
+  });
+
+  // ---------- delegated board actions ----------
+
+  let activeBoardId = null;
+  let activeSnapUuid = null;
+
+  document.getElementById("boards").addEventListener("click", (e) => {
+    const boardEl = e.target.closest(".board");
+    if(!boardEl) return;
+    const id = boardEl.dataset.board;
+
+    const actionBtn = e.target.closest("[data-action]");
+    if(!actionBtn) return;
+    const action = actionBtn.dataset.action;
+
+    if(action === "refresh"){ refreshSnapshots(id); toast("Refreshed"); return; }
+    if(action === "remove"){
+      if(confirm("Remove " + boards[id].name + " from this panel? (Does not affect the board itself.)")){
+        removeBoard(id);
+      }
+      return;
+    }
+    if(action === "toggle-feed"){
+      const feed = document.getElementById("feed-" + id);
+      feed.classList.toggle("open");
+      actionBtn.textContent = (feed.classList.contains("open") ? "▾ " : "▸ ") + "Live feed (WebSocket)";
+      return;
+    }
+    if(action === "new-snapshot"){
+      activeBoardId = id;
+      document.getElementById("snapName").value = "";
+      document.getElementById("snapDesc").value = "";
+      openModal("createSnapOverlay");
+      return;
+    }
+
+    const snapItem = e.target.closest(".snap-item");
+    if(!snapItem) return;
+    activeBoardId = id;
+    activeSnapUuid = snapItem.dataset.uuid;
+
+    if(action === "delete"){
+      if(confirm("Delete this snapshot? This cannot be undone.")){
+        api(boards[id].host, "DELETE", "/v1/snapshots/" + activeSnapUuid)
+          .then(() => { toast("Snapshot deleted", "success"); refreshSnapshots(id); })
+          .catch(err => toast("Delete failed: " + err.message, "error"));
+      }
+      return;
+    }
+    if(action === "edit"){
+      const nameEl = snapItem.querySelector(".snap-name");
+      const descEl = snapItem.querySelector(".snap-desc");
+      document.getElementById("editSnapName").value = nameEl ? nameEl.getAttribute("title") : "";
+      document.getElementById("editSnapDesc").value = descEl ? descEl.textContent : "";
+      openModal("editSnapOverlay");
+      return;
+    }
+    if(action === "restore"){
+      const nameEl = snapItem.querySelector(".snap-name");
+      document.getElementById("restoreTargetLabel").textContent =
+        'Restoring "' + (nameEl ? nameEl.getAttribute("title") : "snapshot") + '" to ' + boards[id].name + ". Choose what to bring back:";
+      const grid = document.getElementById("restoreChecks");
+      grid.innerHTML = RESTORE_FLAGS.map(([key,label]) => `
+        <label class="check-row">
+          <input type="checkbox" data-flag="${key}" checked>
+          ${label}
+        </label>
+      `).join("");
+      openModal("restoreOverlay");
+      return;
+    }
+  });
+
+  document.getElementById("confirmCreateSnap").addEventListener("click", async () => {
+    const b = boards[activeBoardId];
+    if(!b) return;
+    const name = document.getElementById("snapName").value.trim() || "Untitled snapshot";
+    const description = document.getElementById("snapDesc").value.trim();
+    const body = {
+      deleted: false,
+      description,
+      name,
+      path: "/",
+      shared: false,
+      timestamp: Math.floor(Date.now() / 1000),
+      type: "snapshot",
+      uuid: uuid(),
+    };
+    try{
+      await api(b.host, "POST", "/v1/snapshots/", body);
+      toast("Snapshot creation started", "success");
+      closeModal("createSnapOverlay");
+      setTimeout(() => refreshSnapshots(activeBoardId), 800);
+    }catch(e){
+      toast("Create failed: " + e.message, "error");
+    }
+  });
+
+  document.getElementById("confirmEditSnap").addEventListener("click", async () => {
+    const b = boards[activeBoardId];
+    if(!b || !activeSnapUuid) return;
+    try{
+      const current = await api(b.host, "GET", "/v1/snapshots/" + activeSnapUuid);
+      const body = {
+        deleted: current.deleted,
+        description: document.getElementById("editSnapDesc").value.trim(),
+        name: document.getElementById("editSnapName").value.trim(),
+        path: current.path,
+        shared: current.shared,
+        timestamp: current.timestamp,
+        type: current.type,
+        uuid: current.uuid,
+      };
+      await api(b.host, "PUT", "/v1/snapshots/" + activeSnapUuid, body);
+      toast("Snapshot updated", "success");
+      closeModal("editSnapOverlay");
+      refreshSnapshots(activeBoardId);
+    }catch(e){
+      toast("Update failed: " + e.message, "error");
+    }
+  });
+
+  document.getElementById("confirmRestore").addEventListener("click", async () => {
+    const b = boards[activeBoardId];
+    if(!b || !activeSnapUuid) return;
+    const checks = document.querySelectorAll("#restoreChecks input[type=checkbox]");
+    const body = { restoreHeadsPartial: [] };
+    checks.forEach(c => { body[c.dataset.flag] = c.checked; });
+    try{
+      await api(b.host, "POST", "/v1/snapshots/" + activeSnapUuid + "/restore", body);
+      toast("Restore started", "success");
+      closeModal("restoreOverlay");
+      setTimeout(() => refreshSnapshots(activeBoardId), 800);
+    }catch(e){
+      toast("Restore failed: " + e.message, "error");
+    }
+  });
+
+  // ---------- boot ----------
+  loadBoards();
+  initAllBoards();
+
+})();
+</script>
+</body>
+</html>
