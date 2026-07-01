@@ -92,6 +92,7 @@ function renderPanels() {
       </div>
       <div style="margin-top:14px"><label class="muted">Cards this panel controls</label>
         <div class="inline" id="cardChips-${pi}" style="margin-top:6px"></div>
+        <div id="cardOrder-${pi}"></div>
       </div>
       <div id="filters-${pi}" style="margin-top:14px"></div>`;
     host.appendChild(box);
@@ -119,6 +120,34 @@ function renderPanels() {
       });
       chips.appendChild(chip);
     });
+
+    // Ordered list of selected cards — this order is exactly how the operator panel
+    // displays them (e.g. arrange as Left, Mid, Right). Reorder with the arrows.
+    const orderHost = box.querySelector(`#cardOrder-${pi}`);
+    if (p.cardIds.length > 1) {
+      orderHost.innerHTML = '<div class="muted" style="margin:10px 0 6px">Display order on this panel</div>';
+      p.cardIds.forEach((cid, i) => {
+        const c = config.cards.find((x) => x.id === cid);
+        const row = document.createElement('div');
+        row.className = 'order-row';
+        row.innerHTML = `
+          <span class="order-pos">${i + 1}</span>
+          <span class="order-label">${c ? (c.label || c.id) : cid + ' (missing)'}</span>
+          <button class="btn sm ghost order-up" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn sm ghost order-down" ${i === p.cardIds.length - 1 ? 'disabled' : ''}>↓</button>`;
+        row.querySelector('.order-up').addEventListener('click', () => {
+          [p.cardIds[i - 1], p.cardIds[i]] = [p.cardIds[i], p.cardIds[i - 1]];
+          renderPanels();
+        });
+        row.querySelector('.order-down').addEventListener('click', () => {
+          [p.cardIds[i + 1], p.cardIds[i]] = [p.cardIds[i], p.cardIds[i + 1]];
+          renderPanels();
+        });
+        orderHost.appendChild(row);
+      });
+    } else {
+      orderHost.innerHTML = '';
+    }
 
     renderFilters(pi);
   });
