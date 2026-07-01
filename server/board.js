@@ -146,6 +146,63 @@ export async function getHeads(ip) {
   return boardFetch(ip, '/heads');
 }
 
+// Widgets currently placed on a live head — the schematic layout of what's on air.
+export async function getHeadWidgets(ip, headUuid) {
+  return boardFetch(ip, `/heads/${headUuid}/widgets/`);
+}
+
+// Reduce a raw widget (WidgetGet) to the minimal shape the preview renderer needs:
+// its geometry, and its elements' geometry + type + a couple of display hints. Keeps
+// the payload small and hides board internals from the browser.
+export function normalizeWidgetForPreview(w) {
+  const geom = (g) => g && typeof g === 'object'
+    ? { x: +g.x || 0, y: +g.y || 0, width: +g.width || 0, height: +g.height || 0 }
+    : { x: 0, y: 0, width: 0, height: 0 };
+
+  // Pull a human-ish label and a color out of an element's typed properties. Property
+  // values are "type::value" strings (e.g. text::Hello, color::ffffff, protocol::0).
+  function elementHints(el) {
+    const p = el.properties || {};
+    const out = { text: null, color: null, borderColor: null };
+    const decode = (v) => {
+      if (typeof v !== 'string' || !v.includes('::')) return null;
+      const [kind, ...rest] = v.split('::');
+      return { kind, value: rest.join('::') };
+    };
+    // text-bearing fields
+    for (const key of ['text']) {
+      const d = decode(p[key]);
+      if (d) {
+        if (d.kind === 'text') out.text = d.value;
+        else if (d.kind === 'input') out.text = `‹${d.value}›`;
+        else if (d.kind === 'timecode') out.text = d.value === 'realtime' ? '‹clock›' : '‹TC›';
+        else if (d.kind === 'reference') out.text = `‹${d.value}›`;
+        else if (d.kind === 'protocol') out.text = `‹P${d.value}›`;
+      }
+    }
+    // color fields — only literal color:: values become real colors; dynamic sources
+    // (protocol::, reference::) are shown as a neutral marker since we can't resolve them.
+    for (const [key, dst] of [['backgroundColor', 'color'], ['borderColor', 'borderColor']]) {
+      const d = decode(p[key]);
+      if (d && d.kind === 'color') out[dst] = `#${d.value}`;
+    }
+    return out;
+  }
+
+  return {
+    uuid: w.uuid,
+    name: w.name || '',
+    geometry: geom(w.geometry),
+    elements: (w.elements || [])
+      .filter((el) => el && el.visible !== false)
+      .map((el) => ({
+        type: el.type || 'box',
+        geometry: geom(el.geometry),
+        ...elementHints(el),
+      })),
+  };
+}
+
 // Raw stored model blob for a snapshot. Used to enumerate the heads that exist
 // INSIDE the snapshot so we can build the partial head map. Shape is board-specific;
 // see extractSnapshotHeads() for the tolerant parser.
@@ -200,6 +257,58 @@ export function extractSnapshotHeads(model) {
   }
   walk(root, null);
   return found;
+}
+
+// Extract the widget layout for ONE head inside a snapshot model, normalized for the
+// preview renderer. Heads reference widgets by UUID (HeadGet.widgets is a string array),
+// while the full widget definitions live elsewhere in the model — so we build a lookup of
+// every widget-shaped object, then resolve the target head's referenced widgets.
+// Falls back to any widget objects nested directly under the head if references don't
+// resolve. Shape is board-specific and undocumented, so this stays tolerant.
+export function extractSnapshotHeadWidgets(model, headUuid) {
+  function looksLikeUuid(v) {
+    return typeof v === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  }
+  const isWidgetShape = (n) =>
+    n && typeof n === 'object' && looksLikeUuid(n.uuid) && Array.isArray(n.elements);
+
+  let root = model;
+  if (model && typeof model.data === 'string') {
+    try { root = JSON.parse(model.data); } catch { root = model.data; }
+  }
+
+  // Pass 1: find the target head object and collect a global widget lookup.
+  let headNode = null;
+  const widgetById = new Map();
+  (function walk(node, keyHint) {
+    if (Array.isArray(node)) { for (const it of node) walk(it, keyHint); return; }
+    if (node && typeof node === 'object') {
+      if (keyHint === 'heads' && node.uuid === headUuid && Array.isArray(node.widgets)) {
+        headNode = node;
+      }
+      if (isWidgetShape(node)) widgetById.set(node.uuid, node);
+      for (const [k, v] of Object.entries(node)) walk(v, k);
+    }
+  })(root, null);
+
+  if (!headNode) return { widgets: [], resolved: false };
+
+  const refs = headNode.widgets || [];
+  let widgets = [];
+
+  if (refs.length && typeof refs[0] === 'string') {
+    // Widgets referenced by UUID — resolve against the global lookup.
+    widgets = refs.map((id) => widgetById.get(id)).filter(Boolean);
+  } else if (refs.length && typeof refs[0] === 'object') {
+    // Widgets embedded directly on the head.
+    widgets = refs.filter(isWidgetShape);
+  }
+
+  return {
+    widgets: widgets.map(normalizeWidgetForPreview),
+    resolved: widgets.length > 0,
+  };
 }
 
 // PARTIAL RESTORE — the only restore this app performs.

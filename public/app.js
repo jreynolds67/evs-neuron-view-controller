@@ -55,6 +55,113 @@ function cardEl({ k, v, uuid, onClick, selected }) {
   return b;
 }
 
+// ---- Head/snapshot preview renderer ---------------------------------------
+// Draws a schematic of a head from normalized widgets: each widget is a rect placed by
+// its fractional geometry on a 16:9 canvas, and its elements are drawn inside, styled by
+// type (box/pip/audiobar/clock) with any literal colors and text labels.
+const SVGNS = 'http://www.w3.org/2000/svg';
+const ELEMENT_STYLE = {
+  box:      { fill: 'rgba(63,182,255,0.10)', stroke: 'var(--accent)' },
+  pip:      { fill: 'rgba(41,209,124,0.12)', stroke: 'var(--fire)' },
+  audiobar: { fill: 'rgba(255,122,26,0.14)', stroke: 'var(--arm)' },
+  clock:    { fill: 'rgba(139,152,165,0.14)', stroke: 'var(--ink-dim)' },
+};
+
+function buildPreviewSvg(widgets, { w = 320, h = 180 } = {}) {
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('class', 'preview-svg');
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+  // canvas background
+  const bg = document.createElementNS(SVGNS, 'rect');
+  bg.setAttribute('x', 0); bg.setAttribute('y', 0);
+  bg.setAttribute('width', w); bg.setAttribute('height', h);
+  bg.setAttribute('class', 'preview-canvas');
+  svg.appendChild(bg);
+
+  if (!widgets || !widgets.length) {
+    const t = document.createElementNS(SVGNS, 'text');
+    t.setAttribute('x', w / 2); t.setAttribute('y', h / 2);
+    t.setAttribute('class', 'preview-empty-text');
+    t.setAttribute('text-anchor', 'middle');
+    t.textContent = 'No widgets';
+    svg.appendChild(t);
+    return svg;
+  }
+
+  const clamp01 = (n) => Math.max(0, Math.min(1, n || 0));
+  const rect = (x, y, ww, hh, cls, fill, stroke) => {
+    const r = document.createElementNS(SVGNS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', Math.max(1, ww)); r.setAttribute('height', Math.max(1, hh));
+    if (cls) r.setAttribute('class', cls);
+    if (fill) r.setAttribute('fill', fill);
+    if (stroke) r.setAttribute('stroke', stroke);
+    return r;
+  };
+
+  widgets.forEach((wd) => {
+    const g = wd.geometry || {};
+    const wx = clamp01(g.x) * w, wy = clamp01(g.y) * h;
+    const wW = clamp01(g.width) * w, wH = clamp01(g.height) * h;
+
+    // widget frame
+    svg.appendChild(rect(wx, wy, wW, wH, 'preview-widget'));
+
+    (wd.elements || []).forEach((el) => {
+      const eg = el.geometry || {};
+      // element geometry is relative to the widget
+      const ex = wx + clamp01(eg.x) * wW;
+      const ey = wy + clamp01(eg.y) * wH;
+      const eW = clamp01(eg.width) * wW;
+      const eH = clamp01(eg.height) * wH;
+      const style = ELEMENT_STYLE[el.type] || ELEMENT_STYLE.box;
+      svg.appendChild(rect(ex, ey, eW, eH, 'preview-el', el.color || style.fill, el.borderColor || style.stroke));
+
+      // audiobar: draw a few vertical ticks to suggest meters
+      if (el.type === 'audiobar' && eW > 6 && eH > 6) {
+        const bars = Math.min(6, Math.max(2, Math.floor(eW / 6)));
+        for (let i = 0; i < bars; i++) {
+          const bx = ex + 2 + i * ((eW - 4) / bars);
+          svg.appendChild(rect(bx, ey + eH * 0.3, Math.max(1, (eW - 4) / bars - 1), eH * 0.6, 'preview-bar'));
+        }
+      }
+
+      // text label if present and there is room
+      if (el.text && eW > 20 && eH > 10) {
+        const t = document.createElementNS(SVGNS, 'text');
+        t.setAttribute('x', ex + eW / 2); t.setAttribute('y', ey + eH / 2);
+        t.setAttribute('class', 'preview-label');
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('dominant-baseline', 'central');
+        t.textContent = el.text.length > 18 ? el.text.slice(0, 17) + '…' : el.text;
+        svg.appendChild(t);
+      }
+    });
+  });
+
+  return svg;
+}
+
+async function loadPreviewInto(container, url, emptyMsg) {
+  container.innerHTML = '<div class="preview-loading">Loading preview…</div>';
+  try {
+    const data = await api(url);
+    container.innerHTML = '';
+    const svg = buildPreviewSvg(data.widgets || []);
+    container.appendChild(svg);
+    if (data.resolved === false) {
+      const note = document.createElement('div');
+      note.className = 'preview-note';
+      note.textContent = 'Snapshot layout could not be fully read on this board.';
+      container.appendChild(note);
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="preview-note err">${e.message}</div>`;
+  }
+}
+
 function showEmpty(msg) {
   grid.innerHTML = '';
   const d = document.createElement('div');
@@ -93,10 +200,22 @@ async function renderHeads() {
     if (!heads.length) return showEmpty('No heads reported by this card.');
     heads.sort(byName);
     heads.forEach((h) => {
-      grid.appendChild(cardEl({
-        k: h.name || 'Head', uuid: h.uuid,
-        onClick: () => { state.head = h; renderSnapshots(); },
-      }));
+      const card = document.createElement('button');
+      card.className = 'card card-with-preview';
+      card.innerHTML = `
+        <div class="card-preview" data-prev></div>
+        <div class="card-body">
+          <span class="k"></span>
+          <span class="uuid mono"></span>
+        </div>`;
+      card.querySelector('.k').textContent = h.name || 'Head';
+      card.querySelector('.uuid').textContent = h.uuid;
+      card.addEventListener('click', () => { state.head = h; renderSnapshots(); });
+      grid.appendChild(card);
+      // Lazy-load the live layout thumbnail for this head.
+      loadPreviewInto(
+        card.querySelector('[data-prev]'),
+        `/api/panel/cards/${state.card.id}/heads/${h.uuid}/preview`);
     });
   } catch (e) { showEmpty(e.message); }
 }
@@ -167,12 +286,41 @@ function renderSourceHeads(heads) {
   $('stageTitle').textContent = 'Select source head in snapshot';
   $('stageHint').textContent = `${state.snap.name} → ${state.head.name}`;
   grid.innerHTML = '';
+
+  // Comparison header: what's currently on the target head (live) for reference.
+  const compare = document.createElement('div');
+  compare.className = 'compare-live';
+  compare.innerHTML = `
+    <div class="compare-col">
+      <div class="compare-cap">On air now — ${state.head.name}</div>
+      <div class="compare-prev" data-live></div>
+    </div>`;
+  grid.appendChild(compare);
+  loadPreviewInto(
+    compare.querySelector('[data-live]'),
+    `/api/panel/cards/${state.card.id}/heads/${state.head.uuid}/preview`);
+
+  const sub = document.createElement('div');
+  sub.className = 'group-head';
+  sub.textContent = 'Snapshot source heads — tap to load';
+  grid.appendChild(sub);
+
   heads.slice().sort(byName).forEach((h) => {
-    grid.appendChild(cardEl({
-      k: h.name || 'Head', uuid: h.uuid,
-      selected: state.srcHead?.uuid === h.uuid,
-      onClick: () => { state.srcHead = h; openConfirm(); },
-    }));
+    const card = document.createElement('button');
+    card.className = 'card card-with-preview' + (state.srcHead?.uuid === h.uuid ? ' selected' : '');
+    card.innerHTML = `
+      <div class="card-preview" data-prev></div>
+      <div class="card-body">
+        <span class="k"></span>
+        <span class="uuid mono"></span>
+      </div>`;
+    card.querySelector('.k').textContent = h.name || 'Head';
+    card.querySelector('.uuid').textContent = h.uuid;
+    card.addEventListener('click', () => { state.srcHead = h; openConfirm(); });
+    grid.appendChild(card);
+    loadPreviewInto(
+      card.querySelector('[data-prev]'),
+      `/api/panel/cards/${state.card.id}/snapshots/${state.snap.uuid}/heads/${h.uuid}/preview`);
   });
 }
 
