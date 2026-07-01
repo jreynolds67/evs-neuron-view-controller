@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
-  loadConfig, saveConfig, getCardById, getPanelByIp, allowedSnapshotsFor,
+  loadConfig, saveConfig, getCardById, getPanelByIp,
+  getPanelHead, allowedSnapshotsForHead,
 } from './config.js';
 import {
   getSelf, getSnapshotInfo, getSnapshotMeta, getHeads,
@@ -47,7 +48,46 @@ function sendErr(res, e) {
 
 // --- panel-facing API ------------------------------------------------------
 
-// Who am I? Resolve the calling panel by its source IP and return its config.
+// Authorization helper: does this panel have this exact card+head assigned?
+function panelAuthorizesHead(panel, cardId, headUuid) {
+  return !!getPanelHead(panel, cardId, headUuid);
+}
+
+// Resolve panel + card + assigned head for a panel-facing request, or send an error and
+// return null. Every operator endpoint is scoped to a specific assigned head now.
+async function resolveHeadRequest(req, res) {
+  const config = await loadConfig();
+  const panel = getPanelByIp(config, clientIp(req));
+  const { cardId, headUuid } = req.params;
+  if (!panel || !panelAuthorizesHead(panel, cardId, headUuid)) {
+    res.status(403).json({ error: 'Head not permitted for this panel' });
+    return null;
+  }
+  const card = getCardById(config, cardId);
+  if (!card) { res.status(404).json({ error: 'Unknown card' }); return null; }
+  return { config, panel, card, panelHead: getPanelHead(panel, cardId, headUuid) };
+}
+
+// For snapshot-scoped endpoints (no target head in the path): authorize if the panel has
+// ANY assigned head on this card, since the operator reached the snapshot through one.
+async function resolveCardRequest(req, res) {
+  const config = await loadConfig();
+  const panel = getPanelByIp(config, clientIp(req));
+  const { cardId } = req.params;
+  const hasHeadOnCard = panel && (panel.heads || []).some((h) => h.cardId === cardId);
+  if (!hasHeadOnCard) {
+    res.status(403).json({ error: 'Card not permitted for this panel' });
+    return null;
+  }
+  const card = getCardById(config, cardId);
+  if (!card) { res.status(404).json({ error: 'Unknown card' }); return null; }
+  return { config, panel, card };
+}
+
+// Who am I? Resolve the calling panel by its source IP and return its assigned heads.
+// Cards are no longer exposed to the operator — the panel presents a flat, curated head
+// list. Each head carries its source card+uuid (needed for downstream calls), a display
+// label (admin override or board name), and its order.
 app.get('/api/panel/me', async (req, res) => {
   const config = await loadConfig();
   const ip = clientIp(req);
@@ -55,46 +95,30 @@ app.get('/api/panel/me', async (req, res) => {
   if (!panel) {
     return res.status(404).json({ error: 'Panel not registered', ip });
   }
-  const cards = (panel.cardIds || [])
-    .map((id) => getCardById(config, id))
-    .filter(Boolean)
-    .map((c) => ({ id: c.id, label: c.label })); // never leak board IPs to the panel
+  const heads = (panel.heads || [])
+    .filter((h) => getCardById(config, h.cardId)) // drop heads whose card was removed
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((h) => ({
+      cardId: h.cardId,
+      headUuid: h.headUuid,
+      label: h.label || h.boardName || 'Head',
+    }));
   res.json({
-    ip, label: panel.label, layout: panel.layout || '1080', cards,
+    ip, label: panel.label, layout: panel.layout || '1080', heads,
     showUuids: config.settings?.showUuids !== false,
   });
 });
 
-// Heads currently live on a card.
-app.get('/api/panel/cards/:cardId/heads', async (req, res) => {
-  const config = await loadConfig();
-  const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
-  try {
-    const heads = await getHeads(card.ip);
-    // Hide nameless head-shaped entries; they aren't meaningful targets for a recall.
-    const usable = heads.filter((h) => h.name && h.name.trim() && h.name !== h.uuid);
-    res.json((usable.length ? usable : heads).map((h) => ({ uuid: h.uuid, name: h.name })));
-  } catch (e) { sendErr(res, e); }
-});
-
 // Snapshots offered for a given card+head, honouring the admin filter.
 app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
-  const config = await loadConfig();
-  const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const r = await resolveHeadRequest(req, res);
+  if (!r) return;
+  const { card, panelHead } = r;
 
   try {
     const info = await getSnapshotInfo(card.ip);
-    const allow = allowedSnapshotsFor(panel, card.id, req.params.headUuid);
+    const allow = allowedSnapshotsForHead(panelHead);
     const includeDeleted = req.query.includeDeleted === '1';
 
     // Normalise entries (string UUIDs or richer objects) to a consistent shape.
@@ -135,13 +159,9 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) =
 
 // The heads stored inside a snapshot (candidates for the partial mapping source).
 app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) => {
-  const config = await loadConfig();
-  const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const r = await resolveCardRequest(req, res);
+  if (!r) return;
+  const { card } = r;
   try {
     const [modelEntry, liveHeads] = await Promise.all([
       getSnapshotModelCached(card.ip, req.params.snapUuid),
@@ -165,13 +185,9 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
 
 // Preview: widget layout currently on a LIVE head.
 app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => {
-  const config = await loadConfig();
-  const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const r = await resolveHeadRequest(req, res);
+  if (!r) return;
+  const { card } = r;
   try {
     const widgets = await getHeadWidgets(card.ip, req.params.headUuid);
     res.json({ widgets: (widgets || []).map(normalizeWidgetForPreview) });
@@ -180,13 +196,9 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
 
 // Preview: widget layout stored for a head INSIDE a snapshot.
 app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads/:headUuid/preview', async (req, res) => {
-  const config = await loadConfig();
-  const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const r = await resolveCardRequest(req, res);
+  if (!r) return;
+  const { card } = r;
   try {
     const { root } = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     const { headWidgets } = buildSnapshotWidgetIndex(root);
@@ -198,13 +210,9 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads/:headUuid/preview', 
 // Preview (batched): widget layouts for ALL heads in a snapshot, in one call. The Source
 // step uses this so a single model fetch+parse serves every source-head preview at once.
 app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/previews', async (req, res) => {
-  const config = await loadConfig();
-  const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const r = await resolveCardRequest(req, res);
+  if (!r) return;
+  const { card } = r;
   try {
     const { root } = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     const { headWidgets } = buildSnapshotWidgetIndex(root);
@@ -219,19 +227,20 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/previews', async (req, res
 app.post('/api/panel/cards/:cardId/snapshots/:snapUuid/restore', async (req, res) => {
   const config = await loadConfig();
   const panel = getPanelByIp(config, clientIp(req));
-  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
-    return res.status(403).json({ error: 'Card not permitted for this panel' });
-  }
-  const card = getCardById(config, req.params.cardId);
-  if (!card) return res.status(404).json({ error: 'Unknown card' });
-
   const { snapshotHeadUuid, targetHeadUuid } = req.body || {};
   if (!snapshotHeadUuid || !targetHeadUuid) {
     return res.status(400).json({ error: 'snapshotHeadUuid and targetHeadUuid are required' });
   }
+  // Authorize against the exact assigned head being restored onto.
+  const panelHead = panel ? getPanelHead(panel, req.params.cardId, targetHeadUuid) : null;
+  if (!panelHead) {
+    return res.status(403).json({ error: 'Head not permitted for this panel' });
+  }
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
 
-  // Re-check the snapshot is actually permitted for this panel+head before firing.
-  const allow = allowedSnapshotsFor(panel, card.id, targetHeadUuid);
+  // Re-check the snapshot is actually permitted for this head before firing.
+  const allow = allowedSnapshotsForHead(panelHead);
   if (allow && !allow.includes(req.params.snapUuid)) {
     return res.status(403).json({ error: 'Snapshot not permitted for this head on this panel' });
   }
@@ -256,6 +265,7 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Config must have cards[] and panels[]' });
   }
   next.settings = { showUuids: true, ...(next.settings || {}) };
+  (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
   await saveConfig(next);
   res.json({ ok: true });
 });

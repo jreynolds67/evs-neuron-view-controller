@@ -4,9 +4,8 @@
 
 const state = {
   panel: null,
-  step: 'card',
-  card: null,     // { id, label }
-  head: null,     // target head { uuid, name }
+  step: 'head',
+  head: null,     // assigned head { cardId, headUuid, label }
   snap: null,     // { uuid, name, ... }
   srcHead: null,  // snapshot source head { uuid, name }
   showUuids: true,
@@ -35,14 +34,14 @@ async function api(path, opts) {
 }
 
 function setSteps() {
-  const order = ['card', 'head', 'snap', 'source', 'confirm'];
+  const order = ['head', 'snap', 'source', 'confirm'];
   const idx = order.indexOf(state.step);
   document.querySelectorAll('.step').forEach((el) => {
     const i = order.indexOf(el.dataset.step);
     el.classList.toggle('active', i === idx);
     el.classList.toggle('done', i < idx);
   });
-  $('backBtn').disabled = state.step === 'card';
+  $('backBtn').disabled = state.step === 'head';
 }
 
 function cardEl({ k, v, uuid, onClick, selected }) {
@@ -174,64 +173,45 @@ function showEmpty(msg) {
 
 // ---- Steps ----------------------------------------------------------------
 
-async function renderCards() {
-  state.step = 'card'; setSteps();
-  $('stageTitle').textContent = 'Select a card';
-  $('stageHint').textContent = '';
-  grid.innerHTML = '';
-  if (!state.panel.cards.length) return showEmpty('No cards assigned to this panel. Configure it in the admin page.');
-  state.panel.cards.forEach((c) => {
-    grid.appendChild(cardEl({
-      k: c.label, v: null,
-      selected: state.card?.id === c.id,
-      onClick: () => { state.card = c; renderHeads(); },
-    }));
-  });
-}
-
 async function renderHeads() {
   state.step = 'head'; setSteps();
   state.head = null; state.snap = null; state.srcHead = null;
   $('stageTitle').textContent = 'Select a head';
-  $('stageHint').textContent = state.card.label;
-  showEmpty('Loading heads…');
-  connectWs(state.card.id);
-  try {
-    const heads = await api(`/api/panel/cards/${state.card.id}/heads`);
-    grid.innerHTML = '';
-    if (!heads.length) return showEmpty('No heads reported by this card.');
-    heads.sort(byName);
-    heads.forEach((h) => {
-      const card = document.createElement('button');
-      card.className = 'card card-with-preview';
-      card.innerHTML = `
-        <div class="card-preview" data-prev></div>
-        <div class="card-body">
-          <span class="k"></span>
-          <span class="uuid mono"></span>
-        </div>`;
-      card.querySelector('.k').textContent = h.name || 'Head';
-      if (state.showUuids) card.querySelector('.uuid').textContent = h.uuid;
-      else card.querySelector('.uuid').remove();
-      card.addEventListener('click', () => { state.head = h; renderSnapshots(); });
-      grid.appendChild(card);
-      // Lazy-load the live layout thumbnail for this head.
-      loadPreviewInto(
-        card.querySelector('[data-prev]'),
-        `/api/panel/cards/${state.card.id}/heads/${h.uuid}/preview`);
-    });
-  } catch (e) { showEmpty(e.message); }
+  $('stageHint').textContent = '';
+  grid.innerHTML = '';
+  const heads = state.panel.heads || [];
+  if (!heads.length) return showEmpty('No heads assigned to this panel. Configure it in the admin page.');
+
+  heads.forEach((h) => {
+    const card = document.createElement('button');
+    card.className = 'card card-with-preview';
+    card.innerHTML = `
+      <div class="card-preview" data-prev></div>
+      <div class="card-body">
+        <span class="k"></span>
+        <span class="uuid mono"></span>
+      </div>`;
+    card.querySelector('.k').textContent = h.label || 'Head';
+    if (state.showUuids) card.querySelector('.uuid').textContent = h.headUuid;
+    else card.querySelector('.uuid').remove();
+    card.addEventListener('click', () => { state.head = h; connectWs(h.cardId); renderSnapshots(); });
+    grid.appendChild(card);
+    // Lazy-load the live layout thumbnail for this head.
+    loadPreviewInto(
+      card.querySelector('[data-prev]'),
+      `/api/panel/cards/${h.cardId}/heads/${h.headUuid}/preview`);
+  });
 }
 
 async function renderSnapshots() {
   state.step = 'snap'; setSteps();
   state.snap = null; state.srcHead = null;
   $('stageTitle').textContent = 'Select a snapshot';
-  $('stageHint').textContent = `${state.card.label} · ${state.head.name}`;
+  $('stageHint').textContent = state.head.label;
   showEmpty('Loading snapshots…');
   try {
     const { snapshots, state: boardState } = await api(
-      `/api/panel/cards/${state.card.id}/heads/${state.head.uuid}/snapshots`);
+      `/api/panel/cards/${state.head.cardId}/heads/${state.head.headUuid}/snapshots`);
     grid.innerHTML = '';
     if (boardState && boardState !== 'idle') {
       toast(`Board is busy: ${boardState}`, 'err');
@@ -271,7 +251,7 @@ async function pickSnapshot(s) {
   state.srcHead = null;
   try {
     const { heads, parsed } = await api(
-      `/api/panel/cards/${state.card.id}/snapshots/${s.uuid}/heads`);
+      `/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`);
 
     if (parsed && heads.length >= 1) {
       // Always show the Source step, even for a single option — the operator confirms
@@ -287,7 +267,7 @@ async function pickSnapshot(s) {
 function renderSourceHeads(heads) {
   state.step = 'source'; setSteps();
   $('stageTitle').textContent = 'Select source head in snapshot';
-  $('stageHint').textContent = `${state.snap.name} → ${state.head.name}`;
+  $('stageHint').textContent = `${state.snap.name} → ${state.head.label}`;
   grid.innerHTML = '';
 
   const sorted = heads.slice().sort(byName);
@@ -314,7 +294,7 @@ function renderSourceHeads(heads) {
 
   // One batched request for ALL source-head layouts, then render each locally — far
   // faster than a separate model fetch per head.
-  api(`/api/panel/cards/${state.card.id}/snapshots/${state.snap.uuid}/previews`)
+  api(`/api/panel/cards/${state.head.cardId}/snapshots/${state.snap.uuid}/previews`)
     .then(({ heads: byHead }) => {
       previewSlots.forEach((slot, uuid) => {
         const widgets = (byHead && byHead[uuid]) || [];
@@ -336,7 +316,7 @@ function openConfirm() {
   // Compact one-line summary so the dialog fits the short strip panels.
   $('confirmLines').innerHTML = '<div class="confirm-summary"></div>';
   $('confirmLines').querySelector('.confirm-summary').textContent =
-    `Load "${state.srcHead.name || state.srcHead.uuid}" onto ${state.head.name}?`;
+    `Load "${state.srcHead.name || state.srcHead.uuid}" onto ${state.head.label}?`;
   $('overlay').classList.add('show');
 }
 
@@ -349,16 +329,16 @@ async function fire() {
   const fireBtn = $('fireBtn');
   fireBtn.disabled = true; fireBtn.textContent = 'Loading…';
   try {
-    await api(`/api/panel/cards/${state.card.id}/snapshots/${state.snap.uuid}/restore`, {
+    await api(`/api/panel/cards/${state.head.cardId}/snapshots/${state.snap.uuid}/restore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         snapshotHeadUuid: state.srcHead.uuid,
-        targetHeadUuid: state.head.uuid,
+        targetHeadUuid: state.head.headUuid,
       }),
     });
     $('overlay').classList.remove('show');
-    toast(`Loaded "${state.snap.name}" onto ${state.head.name}`, 'ok');
+    toast(`Loaded "${state.snap.name}" onto ${state.head.label}`, 'ok');
     // Return to the snapshot list for the same head so repeat recalls are quick.
     state.srcHead = null;
     renderSnapshots();
@@ -372,15 +352,14 @@ async function fire() {
 // ---- Navigation -----------------------------------------------------------
 
 function back() {
-  if (state.step === 'head') return renderCards();
   if (state.step === 'snap') return renderHeads();
   if (state.step === 'source') return renderSnapshots();
   if (state.step === 'confirm') return closeConfirm();
 }
 
 function restart() {
-  state.card = state.head = state.snap = state.srcHead = null;
-  renderCards();
+  state.head = state.snap = state.srcHead = null;
+  renderHeads();
 }
 
 // ---- Live status (WebSocket) ----------------------------------------------
@@ -414,8 +393,9 @@ async function boot() {
     state.showUuids = state.panel.showUuids !== false;
     document.body.classList.toggle('strip', state.panel.layout === 'strip');
     $('panelLabel').textContent = state.panel.label || 'Neuron MV Control';
-    $('panelSub').textContent = `${state.panel.ip} · ${state.panel.cards.length} card(s)`;
-    renderCards();
+    const n = (state.panel.heads || []).length;
+    $('panelSub').textContent = `${state.panel.ip} · ${n} head${n === 1 ? '' : 's'}`;
+    renderHeads();
   } catch (e) {
     $('panelSub').textContent = 'This panel is not registered.';
     showEmpty(`${e.message}. Add this panel's IP in the admin page.`);

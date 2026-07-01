@@ -77,11 +77,32 @@ $('showUuids').addEventListener('change', (e) => {
 });
 
 // ---- Panels ---------------------------------------------------------------
+// Each panel assigns specific heads: p.heads = [{ cardId, headUuid, boardName, label,
+// order, allowedSnapshots }]. Cards are only the source you pick heads from.
+
+// Cache of probed board data per card so we don't re-hit boards repeatedly.
+const cardHeadsCache = new Map();   // cardId -> [{uuid,name}]
+const cardSnapsCache = new Map();   // cardId -> [{uuid,name}]
+
+async function probeCardHeads(cardId) {
+  if (cardHeadsCache.has(cardId)) return cardHeadsCache.get(cardId);
+  const heads = await fetch(`/api/admin/cards/${cardId}/heads`, { headers: headers() }).then(r => r.json());
+  const list = Array.isArray(heads) ? heads : [];
+  cardHeadsCache.set(cardId, list);
+  return list;
+}
+async function probeCardSnaps(cardId) {
+  if (cardSnapsCache.has(cardId)) return cardSnapsCache.get(cardId);
+  const snaps = await fetch(`/api/admin/cards/${cardId}/snapshots`, { headers: headers() }).then(r => r.json());
+  const list = Array.isArray(snaps) ? snaps : [];
+  cardSnapsCache.set(cardId, list);
+  return list;
+}
 
 function renderPanels() {
   const host = $('panelList'); host.innerHTML = '';
   config.panels.forEach((p, pi) => {
-    p.cardIds ||= []; p.snapshotFilters ||= {};
+    p.heads ||= [];
     const box = document.createElement('div');
     box.className = 'section'; box.style.background = 'var(--panel-2)';
     box.innerHTML = `
@@ -97,156 +118,182 @@ function renderPanels() {
           </select></div>
         <div style="align-self:flex-end"><button class="btn sm del" data-delpanel="${pi}">Remove</button></div>
       </div>
-      <div style="margin-top:14px"><label class="muted">Cards this panel controls</label>
-        <div class="inline" id="cardChips-${pi}" style="margin-top:6px"></div>
-        <div id="cardOrder-${pi}"></div>
-      </div>
-      <div id="filters-${pi}" style="margin-top:14px"></div>`;
+      <div style="margin-top:14px">
+        <label class="muted">Heads on this panel (in display order)</label>
+        <div id="headList-${pi}" style="margin-top:6px"></div>
+        <div class="inline" style="margin-top:8px">
+          <button class="btn sm" data-addhead="${pi}">Add head</button>
+          <span class="muted" id="addHeadState-${pi}"></span>
+        </div>
+        <div id="headPicker-${pi}"></div>
+      </div>`;
     host.appendChild(box);
 
-    // field bindings
     box.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('input', (e) => {
       config.panels[pi][e.target.dataset.f] = e.target.value;
     }));
     box.querySelector('[data-delpanel]').addEventListener('click', () => {
       config.panels.splice(pi, 1); renderPanels();
     });
+    box.querySelector(`[data-addhead="${pi}"]`).addEventListener('click', () => openHeadPicker(pi));
 
-    // card chips
-    const chips = box.querySelector(`#cardChips-${pi}`);
-    config.cards.forEach((c) => {
-      if (!c.id) return;
-      const on = p.cardIds.includes(c.id);
-      const chip = document.createElement('button');
-      chip.className = 'chip' + (on ? ' on' : '');
-      chip.textContent = c.label || c.id;
-      chip.addEventListener('click', () => {
-        const idx = p.cardIds.indexOf(c.id);
-        if (idx >= 0) p.cardIds.splice(idx, 1); else p.cardIds.push(c.id);
-        renderPanels();
-      });
-      chips.appendChild(chip);
-    });
-
-    // Ordered list of selected cards — this order is exactly how the operator panel
-    // displays them (e.g. arrange as Left, Mid, Right). Reorder with the arrows.
-    const orderHost = box.querySelector(`#cardOrder-${pi}`);
-    if (p.cardIds.length > 1) {
-      orderHost.innerHTML = '<div class="muted" style="margin:10px 0 6px">Display order on this panel</div>';
-      p.cardIds.forEach((cid, i) => {
-        const c = config.cards.find((x) => x.id === cid);
-        const row = document.createElement('div');
-        row.className = 'order-row';
-        row.innerHTML = `
-          <span class="order-pos">${i + 1}</span>
-          <span class="order-label">${c ? (c.label || c.id) : cid + ' (missing)'}</span>
-          <button class="btn sm ghost order-up" ${i === 0 ? 'disabled' : ''}>↑</button>
-          <button class="btn sm ghost order-down" ${i === p.cardIds.length - 1 ? 'disabled' : ''}>↓</button>`;
-        row.querySelector('.order-up').addEventListener('click', () => {
-          [p.cardIds[i - 1], p.cardIds[i]] = [p.cardIds[i], p.cardIds[i - 1]];
-          renderPanels();
-        });
-        row.querySelector('.order-down').addEventListener('click', () => {
-          [p.cardIds[i + 1], p.cardIds[i]] = [p.cardIds[i], p.cardIds[i + 1]];
-          renderPanels();
-        });
-        orderHost.appendChild(row);
-      });
-    } else {
-      orderHost.innerHTML = '';
-    }
-
-    renderFilters(pi);
+    renderHeadList(pi);
   });
 }
 
-// Per-head snapshot filters: for each assigned card, probe heads + snapshots,
-// then let the admin restrict which snapshots appear for each head on this panel.
-function renderFilters(pi) {
+function renderHeadList(pi) {
   const p = config.panels[pi];
-  const host = $(`filters-${pi}`); host.innerHTML = '';
-  if (!p.cardIds.length) return;
+  const host = $(`headList-${pi}`); host.innerHTML = '';
+  if (!p.heads.length) {
+    host.innerHTML = '<div class="muted">No heads assigned yet. Use “Add head”.</div>';
+    return;
+  }
+  // keep order field in sync with array position
+  p.heads.forEach((h, i) => { h.order = i; });
 
-  const details = document.createElement('details');
-  details.innerHTML = `<summary>Per-head snapshot filters (${Object.keys(p.snapshotFilters).length} set)</summary>`;
-  const body = document.createElement('div');
-  body.className = 'filterbox';
-  body.innerHTML = `<div class="muted">Leave a head untouched to allow all its snapshots. Tick snapshots to restrict to only those.</div>
-    <div class="inline" style="margin-top:8px">
-      <button class="btn sm ghost" data-probe="${pi}">Probe cards (load heads &amp; snapshots)</button>
-    </div>
-    <div id="probeOut-${pi}" style="margin-top:10px"></div>`;
-  details.appendChild(body); host.appendChild(details);
-
-  body.querySelector(`[data-probe="${pi}"]`).addEventListener('click', () => probePanel(pi));
+  p.heads.forEach((h, i) => {
+    const card = config.cards.find((c) => c.id === h.cardId);
+    const row = document.createElement('div');
+    row.className = 'assigned-head';
+    row.innerHTML = `
+      <div class="ah-top">
+        <span class="order-pos">${i + 1}</span>
+        <input class="ah-label" placeholder="${h.boardName || 'Display label'}" value="${h.label || ''}">
+        <span class="ah-source muted"></span>
+        <button class="btn sm ghost ah-up" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn sm ghost ah-down" ${i === p.heads.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn sm del ah-del">Remove</button>
+      </div>
+      <div class="ah-filter" id="ahFilter-${pi}-${i}"></div>`;
+    row.querySelector('.ah-source').textContent =
+      `${card ? (card.label || card.id) : h.cardId + ' (missing card)'} · ${h.boardName || h.headUuid}`;
+    row.querySelector('.ah-label').addEventListener('input', (e) => { h.label = e.target.value; });
+    row.querySelector('.ah-up').addEventListener('click', () => {
+      [p.heads[i - 1], p.heads[i]] = [p.heads[i], p.heads[i - 1]]; renderHeadList(pi);
+    });
+    row.querySelector('.ah-down').addEventListener('click', () => {
+      [p.heads[i + 1], p.heads[i]] = [p.heads[i], p.heads[i + 1]]; renderHeadList(pi);
+    });
+    row.querySelector('.ah-del').addEventListener('click', () => {
+      p.heads.splice(i, 1); renderHeadList(pi);
+    });
+    host.appendChild(row);
+    renderHeadFilter(pi, i);
+  });
 }
 
-async function probePanel(pi) {
+// Collapsible snapshot filter for one assigned head.
+function renderHeadFilter(pi, i) {
   const p = config.panels[pi];
-  const out = $(`probeOut-${pi}`); out.innerHTML = 'Probing…';
-  const blocks = [];
-  for (const cardId of p.cardIds) {
+  const h = p.heads[i];
+  const host = $(`ahFilter-${pi}-${i}`); host.innerHTML = '';
+
+  const det = document.createElement('details');
+  det.className = 'head-filter';
+  const sum = document.createElement('summary');
+  const countText = () => (h.allowedSnapshots && h.allowedSnapshots.length)
+    ? `${h.allowedSnapshots.length} allowed` : 'all allowed';
+  sum.innerHTML = `<span class="hf-name">Snapshot filter</span> <span class="hf-count muted"></span>`;
+  sum.querySelector('.hf-count').textContent = `— ${countText()}`;
+  det.appendChild(sum);
+
+  const body = document.createElement('div');
+  body.className = 'filterbox';
+  body.innerHTML = `<div class="snaplist" data-snaps></div>`;
+  det.appendChild(body);
+  host.appendChild(det);
+
+  // Load snapshots for this card lazily when the section is first opened.
+  let loaded = false;
+  det.addEventListener('toggle', async () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    const list = body.querySelector('[data-snaps]');
+    list.innerHTML = '<div class="muted">Loading snapshots…</div>';
     try {
-      const [heads, snaps] = await Promise.all([
-        fetch(`/api/admin/cards/${cardId}/heads`, { headers: headers() }).then(r => r.json()),
-        fetch(`/api/admin/cards/${cardId}/snapshots`, { headers: headers() }).then(r => r.json()),
-      ]);
-      blocks.push({ cardId, heads, snaps });
-    } catch (e) {
-      blocks.push({ cardId, error: e.message });
-    }
-  }
-
-  out.innerHTML = '';
-  blocks.forEach(({ cardId, heads, snaps, error }) => {
-    const card = config.cards.find(c => c.id === cardId);
-    const wrap = document.createElement('div');
-    wrap.style.marginBottom = '16px';
-    wrap.innerHTML = `<div style="font-weight:600;margin-bottom:6px">${card?.label || cardId}</div>`;
-    if (error) { wrap.innerHTML += `<div class="muted" style="color:var(--danger)">${error}</div>`; out.appendChild(wrap); return; }
-
-    const sortedHeads = heads.slice().sort(byName);
-    const sortedSnaps = snaps.slice().sort(byName);
-
-    sortedHeads.forEach((h) => {
-      const key = `${cardId}::${h.uuid}`;
-      const selected = p.snapshotFilters[key] || null;
-
-      // Collapsible per-head section. Collapsed by default to keep the page readable.
-      const det = document.createElement('details');
-      det.className = 'head-filter';
-      const sum = document.createElement('summary');
-      const countText = () => {
-        const arr = p.snapshotFilters[key];
-        return arr && arr.length ? `${arr.length} allowed` : 'all allowed';
-      };
-      sum.innerHTML = `<span class="hf-name">${h.name || h.uuid}</span> <span class="hf-count muted"></span>`;
-      sum.querySelector('.hf-count').textContent = `— ${countText()}`;
-      det.appendChild(sum);
-
-      const list = document.createElement('div'); list.className = 'snaplist';
-      sortedSnaps.forEach((s) => {
-        const id = `f-${pi}-${cardId}-${h.uuid}-${s.uuid}`;
-        const checked = selected ? selected.includes(s.uuid) : false;
+      const snaps = (await probeCardSnaps(h.cardId)).slice().sort(byName);
+      list.innerHTML = '';
+      if (!snaps.length) { list.innerHTML = '<div class="muted">No snapshots on this card.</div>'; return; }
+      snaps.forEach((s) => {
+        const checked = (h.allowedSnapshots || []).includes(s.uuid);
         const lab = document.createElement('label');
-        lab.innerHTML = `<input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
+        lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
         lab.querySelector('input').addEventListener('change', (e) => {
-          let arr = p.snapshotFilters[key] ? [...p.snapshotFilters[key]] : [];
+          let arr = h.allowedSnapshots ? [...h.allowedSnapshots] : [];
           if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
-          if (arr.length) p.snapshotFilters[key] = arr; else delete p.snapshotFilters[key];
+          if (arr.length) h.allowedSnapshots = arr; else delete h.allowedSnapshots;
           sum.querySelector('.hf-count').textContent = `— ${countText()}`;
         });
         list.appendChild(lab);
       });
-      det.appendChild(list);
-      wrap.appendChild(det);
-    });
-    out.appendChild(wrap);
+    } catch (e) {
+      list.innerHTML = `<div class="muted" style="color:var(--danger)">${e.message}</div>`;
+    }
   });
 }
 
+// Head picker: choose a card, then one of its heads to assign to the panel.
+async function openHeadPicker(pi) {
+  const host = $(`headPicker-${pi}`);
+  const stateEl = $(`addHeadState-${pi}`);
+  host.innerHTML = '';
+  const picker = document.createElement('div');
+  picker.className = 'filterbox';
+  picker.style.marginTop = '10px';
+  picker.innerHTML = `
+    <div class="inline" style="gap:8px; flex-wrap:wrap">
+      <label class="muted">Card</label>
+      <select class="hp-card"></select>
+      <label class="muted">Head</label>
+      <select class="hp-head"><option value="">— pick a card first —</option></select>
+      <button class="btn sm hp-add" disabled>Add</button>
+      <button class="btn sm ghost hp-cancel">Cancel</button>
+    </div>`;
+  host.appendChild(picker);
+
+  const cardSel = picker.querySelector('.hp-card');
+  const headSel = picker.querySelector('.hp-head');
+  const addBtn = picker.querySelector('.hp-add');
+
+  cardSel.innerHTML = '<option value="">— select —</option>' +
+    config.cards.filter(c => c.id).map(c => `<option value="${c.id}">${c.label || c.id}</option>`).join('');
+
+  cardSel.addEventListener('change', async () => {
+    const cardId = cardSel.value;
+    headSel.innerHTML = '<option value="">Loading…</option>';
+    addBtn.disabled = true;
+    if (!cardId) { headSel.innerHTML = '<option value="">— pick a card first —</option>'; return; }
+    try {
+      const heads = (await probeCardHeads(cardId)).slice().sort(byName);
+      const p = config.panels[pi];
+      const taken = new Set(p.heads.filter(h => h.cardId === cardId).map(h => h.headUuid));
+      const avail = heads.filter(h => !taken.has(h.uuid));
+      if (!avail.length) { headSel.innerHTML = '<option value="">All heads already added</option>'; return; }
+      headSel.innerHTML = '<option value="">— select —</option>' +
+        avail.map(h => `<option value="${h.uuid}">${h.name || h.uuid}</option>`).join('');
+    } catch (e) {
+      headSel.innerHTML = `<option value="">Error: ${e.message}</option>`;
+    }
+  });
+
+  headSel.addEventListener('change', () => { addBtn.disabled = !headSel.value; });
+
+  addBtn.addEventListener('click', () => {
+    const cardId = cardSel.value, headUuid = headSel.value;
+    if (!cardId || !headUuid) return;
+    const heads = cardHeadsCache.get(cardId) || [];
+    const boardName = (heads.find(h => h.uuid === headUuid) || {}).name || '';
+    config.panels[pi].heads.push({ cardId, headUuid, boardName, label: '', order: config.panels[pi].heads.length });
+    host.innerHTML = '';
+    stateEl.textContent = '';
+    renderHeadList(pi);
+  });
+
+  picker.querySelector('.hp-cancel').addEventListener('click', () => { host.innerHTML = ''; });
+}
+
 $('addPanel').addEventListener('click', () => {
-  config.panels.push({ ip: '', label: '', layout: '1080', cardIds: [], snapshotFilters: {} });
+  config.panels.push({ ip: '', label: '', layout: '1080', heads: [] });
   renderPanels();
 });
 
