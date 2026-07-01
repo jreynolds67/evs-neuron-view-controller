@@ -210,6 +210,34 @@ export async function getSnapshotModel(ip, uuid) {
   return boardFetch(ip, `/snapshots/${uuid}/model`);
 }
 
+// Short-lived cache of fetched snapshot models. A saved snapshot is immutable, and the
+// preview/heads calls for one snapshot all arrive within a few seconds of each other, so
+// caching briefly turns N board fetches (one per source head) into a single fetch.
+const _modelCache = new Map(); // key `${ip}::${uuid}` -> { at, model, root }
+const MODEL_TTL_MS = 30000;
+
+function parseModelRoot(model) {
+  let root = model;
+  if (model && typeof model.data === 'string') {
+    try { root = JSON.parse(model.data); } catch { root = model.data; }
+  }
+  return root;
+}
+
+export async function getSnapshotModelCached(ip, uuid) {
+  const key = `${ip}::${uuid}`;
+  const hit = _modelCache.get(key);
+  if (hit && (Date.now() - hit.at) < MODEL_TTL_MS) return hit;
+  const model = await getSnapshotModel(ip, uuid);
+  const entry = { at: Date.now(), model, root: parseModelRoot(model) };
+  _modelCache.set(key, entry);
+  if (_modelCache.size > 32) {
+    const now = Date.now();
+    for (const [k, v] of _modelCache) if (now - v.at >= MODEL_TTL_MS) _modelCache.delete(k);
+  }
+  return entry;
+}
+
 // Extract named head entries from a snapshot model blob. An operator cannot create an
 // unnamed head/snapshot in the GUI, so a real, selectable head ALWAYS has a name. That
 // single fact is the whole discriminator: collect every object carrying a uuid + a
@@ -266,6 +294,18 @@ export function extractSnapshotHeads(model) {
 // Falls back to any widget objects nested directly under the head if references don't
 // resolve. Shape is board-specific and undocumented, so this stays tolerant.
 export function extractSnapshotHeadWidgets(model, headUuid) {
+  const root = (model && typeof model.data === 'string')
+    ? (() => { try { return JSON.parse(model.data); } catch { return model.data; } })()
+    : (model && model.__isRoot ? model.root : model);
+  const { headWidgets } = buildSnapshotWidgetIndex(root);
+  const w = headWidgets.get(headUuid);
+  return w ? { widgets: w, resolved: w.length > 0 } : { widgets: [], resolved: false };
+}
+
+// Build, in ONE pass over the model, a map of headUuid -> normalized widgets for every
+// head. This lets a single model fetch+parse serve previews for all source heads at once
+// instead of re-walking the blob per head.
+export function buildSnapshotWidgetIndex(root) {
   function looksLikeUuid(v) {
     return typeof v === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
@@ -273,42 +313,31 @@ export function extractSnapshotHeadWidgets(model, headUuid) {
   const isWidgetShape = (n) =>
     n && typeof n === 'object' && looksLikeUuid(n.uuid) && Array.isArray(n.elements);
 
-  let root = model;
-  if (model && typeof model.data === 'string') {
-    try { root = JSON.parse(model.data); } catch { root = model.data; }
-  }
-
-  // Pass 1: find the target head object and collect a global widget lookup.
-  let headNode = null;
+  const headNodes = [];
   const widgetById = new Map();
   (function walk(node, keyHint) {
     if (Array.isArray(node)) { for (const it of node) walk(it, keyHint); return; }
     if (node && typeof node === 'object') {
-      if (keyHint === 'heads' && node.uuid === headUuid && Array.isArray(node.widgets)) {
-        headNode = node;
+      if (keyHint === 'heads' && looksLikeUuid(node.uuid) && Array.isArray(node.widgets)) {
+        headNodes.push(node);
       }
       if (isWidgetShape(node)) widgetById.set(node.uuid, node);
       for (const [k, v] of Object.entries(node)) walk(v, k);
     }
   })(root, null);
 
-  if (!headNode) return { widgets: [], resolved: false };
-
-  const refs = headNode.widgets || [];
-  let widgets = [];
-
-  if (refs.length && typeof refs[0] === 'string') {
-    // Widgets referenced by UUID — resolve against the global lookup.
-    widgets = refs.map((id) => widgetById.get(id)).filter(Boolean);
-  } else if (refs.length && typeof refs[0] === 'object') {
-    // Widgets embedded directly on the head.
-    widgets = refs.filter(isWidgetShape);
+  const headWidgets = new Map();
+  for (const head of headNodes) {
+    const refs = head.widgets || [];
+    let widgets = [];
+    if (refs.length && typeof refs[0] === 'string') {
+      widgets = refs.map((id) => widgetById.get(id)).filter(Boolean);
+    } else if (refs.length && typeof refs[0] === 'object') {
+      widgets = refs.filter(isWidgetShape);
+    }
+    headWidgets.set(head.uuid, widgets.map(normalizeWidgetForPreview));
   }
-
-  return {
-    widgets: widgets.map(normalizeWidgetForPreview),
-    resolved: widgets.length > 0,
-  };
+  return { headWidgets };
 }
 
 // PARTIAL RESTORE — the only restore this app performs.

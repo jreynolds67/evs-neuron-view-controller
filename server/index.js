@@ -12,7 +12,7 @@ import {
   getSelf, getSnapshotInfo, getSnapshotMeta, getHeads,
   getSnapshotModel, extractSnapshotHeads, restorePartial,
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
-  extractSnapshotHeadWidgets,
+  extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
 } from './board.js';
 import { getEntries, clear as clearLog } from './logger.js';
 
@@ -140,12 +140,12 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
   try {
-    const [model, liveHeads] = await Promise.all([
-      getSnapshotModel(card.ip, req.params.snapUuid),
+    const [modelEntry, liveHeads] = await Promise.all([
+      getSnapshotModelCached(card.ip, req.params.snapUuid),
       getHeads(card.ip).catch(() => []),
     ]);
     // Extractor already returns only named heads (unnamed entries aren't selectable).
-    let heads = extractSnapshotHeads(model);
+    let heads = extractSnapshotHeads(modelEntry.model);
 
     // Light backstop: if the snapshot's head UUIDs line up with live board heads, keep
     // the intersection. If they don't line up at all (e.g. an imported snapshot), keep
@@ -185,9 +185,29 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads/:headUuid/preview', 
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
   try {
-    const model = await getSnapshotModel(card.ip, req.params.snapUuid);
-    const { widgets, resolved } = extractSnapshotHeadWidgets(model, req.params.headUuid);
-    res.json({ widgets, resolved });
+    const { root } = await getSnapshotModelCached(card.ip, req.params.snapUuid);
+    const { headWidgets } = buildSnapshotWidgetIndex(root);
+    const widgets = headWidgets.get(req.params.headUuid) || [];
+    res.json({ widgets, resolved: widgets.length > 0 });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Preview (batched): widget layouts for ALL heads in a snapshot, in one call. The Source
+// step uses this so a single model fetch+parse serves every source-head preview at once.
+app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/previews', async (req, res) => {
+  const config = await loadConfig();
+  const panel = getPanelByIp(config, clientIp(req));
+  if (!panel || !(panel.cardIds || []).includes(req.params.cardId)) {
+    return res.status(403).json({ error: 'Card not permitted for this panel' });
+  }
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  try {
+    const { root } = await getSnapshotModelCached(card.ip, req.params.snapUuid);
+    const { headWidgets } = buildSnapshotWidgetIndex(root);
+    const byHead = {};
+    for (const [uuid, widgets] of headWidgets) byHead[uuid] = widgets;
+    res.json({ heads: byHead });
   } catch (e) { sendErr(res, e); }
 });
 

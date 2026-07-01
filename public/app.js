@@ -287,7 +287,10 @@ function renderSourceHeads(heads) {
   $('stageHint').textContent = `${state.snap.name} → ${state.head.name}`;
   grid.innerHTML = '';
 
-  heads.slice().sort(byName).forEach((h) => {
+  const sorted = heads.slice().sort(byName);
+  const previewSlots = new Map(); // headUuid -> preview container
+
+  sorted.forEach((h) => {
     const card = document.createElement('button');
     card.className = 'card card-with-preview' + (state.srcHead?.uuid === h.uuid ? ' selected' : '');
     card.innerHTML = `
@@ -300,10 +303,26 @@ function renderSourceHeads(heads) {
     card.querySelector('.uuid').textContent = h.uuid;
     card.addEventListener('click', () => { state.srcHead = h; openConfirm(); });
     grid.appendChild(card);
-    loadPreviewInto(
-      card.querySelector('[data-prev]'),
-      `/api/panel/cards/${state.card.id}/snapshots/${state.snap.uuid}/heads/${h.uuid}/preview`);
+    const slot = card.querySelector('[data-prev]');
+    slot.innerHTML = '<div class="preview-loading">Loading preview…</div>';
+    previewSlots.set(h.uuid, slot);
   });
+
+  // One batched request for ALL source-head layouts, then render each locally — far
+  // faster than a separate model fetch per head.
+  api(`/api/panel/cards/${state.card.id}/snapshots/${state.snap.uuid}/previews`)
+    .then(({ heads: byHead }) => {
+      previewSlots.forEach((slot, uuid) => {
+        const widgets = (byHead && byHead[uuid]) || [];
+        slot.innerHTML = '';
+        slot.appendChild(buildPreviewSvg(widgets));
+      });
+    })
+    .catch((e) => {
+      previewSlots.forEach((slot) => {
+        slot.innerHTML = `<div class="preview-note err">${e.message}</div>`;
+      });
+    });
 }
 
 // ---- Confirm + fire -------------------------------------------------------
