@@ -3,5 +3,5 @@ services:
     build: .
     container_name: evs-mv-control
     ports:
-      - "8080:80"
+      - "8001:80"
     restart: unless-stopped
