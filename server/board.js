@@ -95,6 +95,48 @@ export async function getSnapshotInfo(ip) {
   return boardFetch(ip, '/snapshots');
 }
 
+// The documented schema says /snapshots returns an array of UUID strings, but some
+// firmware returns richer objects. Normalise any entry to { uuid, name?, description?,
+// timestamp? }. Pulls the UUID from common key names, and captures inline metadata if
+// the board already provides it (so we can skip a per-item metadata fetch).
+function looksLikeUuid(v) {
+  return typeof v === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+
+export function normalizeSnapshotEntry(entry) {
+  if (typeof entry === 'string') {
+    return { uuid: looksLikeUuid(entry) ? entry : null, inlineMeta: false };
+  }
+
+  if (entry && typeof entry === 'object') {
+    // Find the UUID: prefer a field literally named uuid, else any uuid-looking value,
+    // handling the case where uuid is itself nested as { uuid: "..." } or similar.
+    let uuid = null;
+    const candidates = [entry.uuid, entry.id, entry.snapshotUuid, entry.snapshot];
+    for (const c of candidates) {
+      if (looksLikeUuid(c)) { uuid = c; break; }
+      if (c && typeof c === 'object' && looksLikeUuid(c.uuid)) { uuid = c.uuid; break; }
+    }
+    if (!uuid) {
+      // Last resort: scan all string values for something uuid-shaped.
+      for (const v of Object.values(entry)) if (looksLikeUuid(v)) { uuid = v; break; }
+    }
+    const hasMeta = 'name' in entry || 'description' in entry || 'timestamp' in entry;
+    return {
+      uuid,
+      inlineMeta: hasMeta,
+      name: entry.name,
+      description: entry.description,
+      timestamp: entry.timestamp,
+      path: entry.path,
+      deleted: entry.deleted,
+      shared: entry.shared,
+    };
+  }
+  return { uuid: null, inlineMeta: false };
+}
+
 export async function getSnapshotMeta(ip, uuid) {
   return boardFetch(ip, `/snapshots/${uuid}`);
 }

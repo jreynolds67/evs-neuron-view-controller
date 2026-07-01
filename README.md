@@ -56,6 +56,20 @@ In the admin page, expand a panel, click **Probe cards**, and tick which snapsho
 allowed for each head. Untouched heads allow all snapshots. Filters are enforced again
 server-side at restore time.
 
+### Snapshot list behavior
+
+The board's `/v1/snapshots` returns full metadata objects (not just UUIDs, despite the
+published spec). The app normalizes these and:
+
+- **Hides board-deleted snapshots** (`deleted: true`) by default. On this firmware the
+  `deleted` flag is accurate — tombstoned snapshots stay in the list but shouldn't be
+  offered for recall, and hiding them also removes confusing name duplicates where a live
+  and a deleted snapshot share a name. To include them for troubleshooting, append
+  `?includeDeleted=1` to the panel snapshots request.
+- **Groups by folder** using the snapshot `path` field (e.g. "Layout Presets",
+  "Position Specific"), matching the board's own organization. Folders whose entries are
+  all deleted disappear from the list automatically.
+
 ## Local development
 
 ```bash

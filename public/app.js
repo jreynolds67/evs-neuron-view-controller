@@ -110,12 +110,29 @@ async function renderSnapshots() {
       toast(`Board is busy: ${boardState}`, 'err');
     }
     if (!snapshots.length) return showEmpty('No snapshots available for this head.');
+
+    // Group by folder (path). Blank path = "Ungrouped", shown last.
+    const groups = new Map();
     snapshots.forEach((s) => {
-      const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
-      grid.appendChild(cardEl({
-        k: s.name, v: [s.description, when].filter(Boolean).join('  ·  '),
-        onClick: () => pickSnapshot(s),
-      }));
+      const key = s.path && s.path.trim() ? s.path : '\uffffUngrouped';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    });
+    const orderedKeys = [...groups.keys()].sort();
+
+    orderedKeys.forEach((key) => {
+      const label = key === '\uffffUngrouped' ? 'Ungrouped' : key;
+      const header = document.createElement('div');
+      header.className = 'group-head';
+      header.textContent = label;
+      grid.appendChild(header);
+      groups.get(key).forEach((s) => {
+        const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
+        grid.appendChild(cardEl({
+          k: s.name, v: [s.description, when].filter(Boolean).join('  ·  '),
+          onClick: () => pickSnapshot(s),
+        }));
+      });
     });
   } catch (e) { showEmpty(e.message); }
 }

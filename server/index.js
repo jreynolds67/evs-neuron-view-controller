@@ -11,6 +11,7 @@ import {
 import {
   getSelf, getSnapshotInfo, getSnapshotMeta, getHeads,
   getSnapshotModel, extractSnapshotHeads, restorePartial,
+  normalizeSnapshotEntry,
 } from './board.js';
 import { getEntries, clear as clearLog } from './logger.js';
 
@@ -88,19 +89,40 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) =
   try {
     const info = await getSnapshotInfo(card.ip);
     const allow = allowedSnapshotsFor(panel, card.id, req.params.headUuid);
-    let uuids = info.snapshots || [];
-    if (allow) uuids = uuids.filter((u) => allow.includes(u));
+    const includeDeleted = req.query.includeDeleted === '1';
 
-    // Enrich with metadata (name/description/timestamp) for a usable touch list.
-    const metas = await Promise.all(uuids.map(async (u) => {
+    // Normalise entries (string UUIDs or richer objects) to a consistent shape.
+    let entries = (info.snapshots || [])
+      .map(normalizeSnapshotEntry)
+      .filter((e) => e.uuid); // drop anything we couldn't resolve a UUID for
+
+    // Hide board-side deleted (tombstoned) snapshots unless explicitly requested.
+    if (!includeDeleted) entries = entries.filter((e) => e.deleted !== true);
+
+    if (allow) entries = entries.filter((e) => allow.includes(e.uuid));
+
+    // Enrich with metadata. If the list entry already carried it, use that and skip
+    // the per-item fetch (which is what was 404ing when the UUID was an [object Object]).
+    const metas = await Promise.all(entries.map(async (e) => {
+      if (e.inlineMeta) {
+        return {
+          uuid: e.uuid,
+          name: e.name || e.uuid,
+          description: e.description || '',
+          timestamp: e.timestamp || 0,
+          path: e.path || '',
+        };
+      }
       try {
-        const m = await getSnapshotMeta(card.ip, u);
-        return { uuid: u, name: m.name || u, description: m.description || '', timestamp: m.timestamp || 0 };
+        const m = await getSnapshotMeta(card.ip, e.uuid);
+        return { uuid: e.uuid, name: m.name || e.uuid, description: m.description || '', timestamp: m.timestamp || 0, path: m.path || '' };
       } catch {
-        return { uuid: u, name: u, description: '', timestamp: 0 };
+        return { uuid: e.uuid, name: e.uuid, description: '', timestamp: 0, path: '' };
       }
     }));
-    metas.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    // Sort by folder, then name, for a predictable grouped list.
+    metas.sort((a, b) =>
+      (a.path || '').localeCompare(b.path || '') || (a.name || '').localeCompare(b.name || ''));
     res.json({ state: info.state, snapshots: metas });
   } catch (e) { sendErr(res, e); }
 });
@@ -183,9 +205,13 @@ app.get('/api/admin/cards/:cardId/snapshots', requireAdmin, async (req, res) => 
   if (!card) return res.status(404).json({ error: 'Unknown card' });
   try {
     const info = await getSnapshotInfo(card.ip);
-    const metas = await Promise.all((info.snapshots || []).map(async (u) => {
-      try { const m = await getSnapshotMeta(card.ip, u); return { uuid: u, name: m.name || u }; }
-      catch { return { uuid: u, name: u }; }
+    const entries = (info.snapshots || [])
+      .map(normalizeSnapshotEntry)
+      .filter((e) => e.uuid);
+    const metas = await Promise.all(entries.map(async (e) => {
+      if (e.inlineMeta) return { uuid: e.uuid, name: e.name || e.uuid };
+      try { const m = await getSnapshotMeta(card.ip, e.uuid); return { uuid: e.uuid, name: m.name || e.uuid }; }
+      catch { return { uuid: e.uuid, name: e.uuid }; }
     }));
     res.json(metas);
   } catch (e) { sendErr(res, e); }

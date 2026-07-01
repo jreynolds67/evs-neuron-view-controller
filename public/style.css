@@ -88,6 +88,15 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   border: 1px dashed var(--line); border-radius: var(--radius);
 }
 
+/* Folder header inside the snapshot grid — spans all columns. */
+.group-head {
+  grid-column: 1 / -1;
+  font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-dim); padding: 10px 2px 2px; border-bottom: 1px solid var(--line);
+  margin-top: 4px;
+}
+body.strip .group-head { padding: 4px 2px 2px; font-size: 11px; }
+
 /* ---- Footer action bar ---- */
 .actionbar {
   flex: 0 0 auto; display: flex; gap: 12px; align-items: center;
