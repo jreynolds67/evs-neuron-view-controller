@@ -56,6 +56,7 @@ function renderCards() {
   tb.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', (e) => {
     config.cards.splice(+e.target.dataset.del, 1); renderCards(); renderPanels();
   }));
+  if (typeof renderReachRow === 'function') renderReachRow();
 }
 
 $('addCard').addEventListener('click', () => {
@@ -202,4 +203,83 @@ $('addPanel').addEventListener('click', () => {
 
 $('reload').addEventListener('click', loadConfig);
 $('save').addEventListener('click', saveConfig);
+
+// ---- Board API activity log ----------------------------------------------
+
+let lastLogId = 0;
+let logTimer = null;
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour12: false }) + '.' +
+    String(d.getMilliseconds()).padStart(3, '0');
+}
+
+async function refreshLog(reset = false) {
+  if (reset) { lastLogId = 0; $('logRows').innerHTML = ''; }
+  try {
+    const res = await fetch(`/api/admin/log?since=${lastLogId}`, { headers: headers() });
+    if (!res.ok) throw new Error(res.status);
+    const { entries } = await res.json();
+    const tb = $('logRows');
+    entries.forEach((e) => {
+      lastLogId = Math.max(lastLogId, e.id);
+      const tr = document.createElement('tr');
+      const statusTxt = e.status != null ? e.status : (e.error || 'ERR');
+      const statusColor = e.ok ? 'var(--fire)' : 'var(--danger)';
+      tr.innerHTML = `
+        <td class="mono" style="font-size:12px">${fmtTime(e.ts)}</td>
+        <td class="mono">${e.method || ''}</td>
+        <td class="mono" style="font-size:12px">${(e.ip || '') + (e.path || '')}</td>
+        <td class="mono" style="color:${statusColor}">${statusTxt}</td>
+        <td class="mono">${e.durationMs ?? ''}</td>
+        <td style="font-size:12px;color:var(--ink-dim)">${(e.detail || e.error || '').toString().slice(0,160)}</td>`;
+      tb.prepend(tr); // newest on top
+    });
+    // Trim DOM to 200 rows
+    while (tb.children.length > 200) tb.removeChild(tb.lastChild);
+    $('logState').textContent = `updated ${new Date().toLocaleTimeString([], {hour12:false})}`;
+  } catch (e) {
+    $('logState').textContent = 'log error: ' + e.message;
+  }
+}
+
+function startLogAuto() {
+  stopLogAuto();
+  if ($('logAuto').checked) logTimer = setInterval(refreshLog, 2000);
+}
+function stopLogAuto() { if (logTimer) { clearInterval(logTimer); logTimer = null; } }
+
+$('logRefresh').addEventListener('click', () => refreshLog());
+$('logAuto').addEventListener('change', startLogAuto);
+$('logClear').addEventListener('click', async () => {
+  await fetch('/api/admin/log', { method: 'DELETE', headers: headers() });
+  refreshLog(true);
+});
+
+// Per-card reach test buttons (rebuilt whenever cards change).
+function renderReachRow() {
+  const row = $('reachRow'); row.innerHTML = '';
+  config.cards.forEach((c) => {
+    if (!c.id) return;
+    const b = document.createElement('button');
+    b.className = 'btn sm ghost';
+    b.textContent = `Test ${c.label || c.id}`;
+    b.addEventListener('click', async () => {
+      b.textContent = `Testing ${c.label || c.id}…`;
+      try {
+        const res = await fetch(`/api/admin/cards/${c.id}/reach`, { headers: headers() });
+        const r = await res.json();
+        if (r.ok) toast(`${c.label}: reachable (${r.product || 'OK'} ${r.version || ''}, ${r.durationMs}ms)`, 'ok');
+        else toast(`${c.label}: ${r.error}${r.detail ? ' — ' + r.detail : ''}`, 'err');
+      } catch (e) { toast(`${c.label}: ${e.message}`, 'err'); }
+      b.textContent = `Test ${c.label || c.id}`;
+      refreshLog();
+    });
+    row.appendChild(b);
+  });
+}
+
 loadConfig();
+refreshLog(true);
+startLogAuto();

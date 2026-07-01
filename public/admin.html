@@ -81,6 +81,27 @@
         <button class="btn sm" id="addPanel">Add panel</button>
       </div>
     </div>
+
+    <!-- API LOG -->
+    <div class="section">
+      <h2>Board API activity</h2>
+      <div class="desc">Live log of every request this server makes to the multiviewer boards, including connection failures with their underlying cause. Use "Test reach" on a card to probe it without changing anything.</div>
+      <div class="inline" style="margin-bottom:10px">
+        <label class="chip"><input type="checkbox" id="logAuto" checked style="width:auto"> Auto-refresh</label>
+        <button class="btn sm ghost" id="logRefresh">Refresh now</button>
+        <button class="btn sm ghost" id="logClear">Clear log</button>
+        <span class="muted" id="logState"></span>
+      </div>
+      <div id="reachRow" class="inline" style="margin-bottom:10px"></div>
+      <table>
+        <thead><tr>
+          <th style="width:96px">Time</th><th style="width:60px">Method</th>
+          <th>Target</th><th style="width:70px">Status</th>
+          <th style="width:64px">ms</th><th>Detail</th>
+        </tr></thead>
+        <tbody id="logRows"></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="savebar">

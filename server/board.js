@@ -4,6 +4,8 @@
 // cannot be constructed through this module — every restore flag except the partial
 // head map is hard-coded to false.
 
+import { log, describeError } from './logger.js';
+
 const API_TIMEOUT_MS = 8000;
 
 function boardBase(ip) {
@@ -13,8 +15,11 @@ function boardBase(ip) {
 async function boardFetch(ip, path, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const method = (options.method || 'GET').toUpperCase();
+  const url = `${boardBase(ip)}${path}`;
+  const started = Date.now();
   try {
-    const res = await fetch(`${boardBase(ip)}${path}`, {
+    const res = await fetch(url, {
       ...options,
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -22,13 +27,33 @@ async function boardFetch(ip, path, options = {}) {
     const text = await res.text();
     let body;
     try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+    const durationMs = Date.now() - started;
+
     if (!res.ok) {
+      log({ ip, path, method, url, status: res.status, durationMs, ok: false,
+        error: `HTTP ${res.status}`,
+        detail: typeof body === 'string' ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300) });
       const err = new Error(`Board ${ip} ${path} -> ${res.status}`);
       err.status = res.status;
       err.body = body;
       throw err;
     }
+
+    log({ ip, path, method, url, status: res.status, durationMs, ok: true });
     return body;
+  } catch (e) {
+    // Only log connection-level failures here; HTTP errors were already logged above.
+    if (e.status === undefined) {
+      const durationMs = Date.now() - started;
+      const { code, detail } = describeError(e);
+      log({ ip, path, method, url, status: null, durationMs, ok: false, error: code, detail });
+      const err = new Error(`fetch failed (${code}) for ${ip}${path}`);
+      err.status = 502;
+      err.code = code;
+      err.detail = detail;
+      throw err;
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
   }

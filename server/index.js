@@ -12,6 +12,7 @@ import {
   getSelf, getSnapshotInfo, getSnapshotMeta, getHeads,
   getSnapshotModel, extractSnapshotHeads, restorePartial,
 } from './board.js';
+import { getEntries, clear as clearLog } from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
@@ -39,7 +40,7 @@ function requireAdmin(req, res, next) {
 
 function sendErr(res, e) {
   const status = e.status || 502;
-  res.status(status).json({ error: e.message, detail: e.body || null });
+  res.status(status).json({ error: e.message, code: e.code || null, detail: e.detail || e.body || null });
 }
 
 // --- panel-facing API ------------------------------------------------------
@@ -195,6 +196,36 @@ app.get('/api/admin/cards/:cardId/self', requireAdmin, async (req, res) => {
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
   try { res.json(await getSelf(card.ip)); } catch (e) { sendErr(res, e); }
+});
+
+// --- API activity log (admin) ---------------------------------------------
+
+app.get('/api/admin/log', requireAdmin, (req, res) => {
+  const since = parseInt(req.query.since, 10) || 0;
+  res.json({ entries: getEntries(since) });
+});
+
+app.delete('/api/admin/log', requireAdmin, (_req, res) => {
+  clearLog();
+  res.json({ ok: true });
+});
+
+// Reachability probe: try a lightweight GET against a card's board and report the
+// raw outcome (status or connection error code). Does not change anything on the board.
+app.get('/api/admin/cards/:cardId/reach', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (!card.ip) return res.json({ ok: false, ip: null, error: 'No IP set for this card' });
+  const started = Date.now();
+  try {
+    const self = await getSelf(card.ip);
+    res.json({ ok: true, ip: card.ip, durationMs: Date.now() - started,
+      product: self?.app?.productName || null, version: self?.app?.productVersion || null });
+  } catch (e) {
+    res.json({ ok: false, ip: card.ip, durationMs: Date.now() - started,
+      error: e.code || e.message, detail: e.detail || null });
+  }
 });
 
 // --- WebSocket fan-out ------------------------------------------------------
