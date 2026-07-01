@@ -30,7 +30,7 @@ async function api(path, opts) {
 }
 
 function setSteps() {
-  const order = ['card', 'head', 'snap', 'confirm'];
+  const order = ['card', 'head', 'snap', 'source', 'confirm'];
   const idx = order.indexOf(state.step);
   document.querySelectorAll('.step').forEach((el) => {
     const i = order.indexOf(el.dataset.step);
@@ -140,19 +140,14 @@ async function renderSnapshots() {
 // After choosing a snapshot, resolve which source head inside it maps to the target.
 async function pickSnapshot(s) {
   state.snap = s;
+  state.srcHead = null;
   try {
     const { heads, parsed } = await api(
       `/api/panel/cards/${state.card.id}/snapshots/${s.uuid}/heads`);
 
-    if (parsed && heads.length === 1) {
-      state.srcHead = heads[0];
-      return openConfirm();
-    }
-    if (parsed && heads.length > 1) {
-      // Prefer a name match with the target head; else ask.
-      const match = heads.find((h) => h.name && state.head.name &&
-        h.name.trim().toLowerCase() === state.head.name.trim().toLowerCase());
-      if (match) { state.srcHead = match; return openConfirm(); }
+    if (parsed && heads.length >= 1) {
+      // Always show the Source step, even for a single option — the operator confirms
+      // what they're selecting rather than being advanced past a step silently.
       return renderSourceHeads(heads);
     }
     // Could not parse heads from the snapshot model — do NOT guess. Guessing risks
@@ -162,12 +157,14 @@ async function pickSnapshot(s) {
 }
 
 function renderSourceHeads(heads) {
+  state.step = 'source'; setSteps();
   $('stageTitle').textContent = 'Select source head in snapshot';
   $('stageHint').textContent = `${state.snap.name} → ${state.head.name}`;
   grid.innerHTML = '';
   heads.forEach((h) => {
     grid.appendChild(cardEl({
       k: h.name || 'Head', uuid: h.uuid,
+      selected: state.srcHead?.uuid === h.uuid,
       onClick: () => { state.srcHead = h; openConfirm(); },
     }));
   });
@@ -192,7 +189,7 @@ function openConfirm() {
 
 function closeConfirm() {
   $('overlay').classList.remove('show');
-  state.step = 'snap'; setSteps();
+  state.step = 'source'; setSteps();
 }
 
 async function fire() {
@@ -209,8 +206,9 @@ async function fire() {
     });
     $('overlay').classList.remove('show');
     toast(`Loaded "${state.snap.name}" onto ${state.head.name}`, 'ok');
-    // Return to snapshot list for the same head so repeat recalls are quick.
-    state.step = 'snap'; setSteps();
+    // Return to the snapshot list for the same head so repeat recalls are quick.
+    state.srcHead = null;
+    renderSnapshots();
   } catch (e) {
     toast(e.message, 'err');
   } finally {
@@ -223,6 +221,7 @@ async function fire() {
 function back() {
   if (state.step === 'head') return renderCards();
   if (state.step === 'snap') return renderHeads();
+  if (state.step === 'source') return renderSnapshots();
   if (state.step === 'confirm') return closeConfirm();
 }
 

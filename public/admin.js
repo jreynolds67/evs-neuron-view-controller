@@ -181,7 +181,7 @@ async function probePanel(pi) {
         const id = `f-${pi}-${cardId}-${h.uuid}-${s.uuid}`;
         const checked = selected ? selected.includes(s.uuid) : false;
         const lab = document.createElement('label');
-        lab.innerHTML = `<input type="checkbox" id="${id}" ${checked ? 'checked' : ''}> ${s.name}`;
+        lab.innerHTML = `<input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
         lab.querySelector('input').addEventListener('change', (e) => {
           let arr = p.snapshotFilters[key] ? [...p.snapshotFilters[key]] : [];
           if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
