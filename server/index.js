@@ -14,6 +14,7 @@ import {
   getSnapshotModel, extractSnapshotHeads, restorePartial,
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
+  getInputGroups, setWidgetGroup,
 } from './board.js';
 import { getEntries, clear as clearLog } from './logger.js';
 
@@ -191,6 +192,46 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
   try {
     const widgets = await getHeadWidgets(card.ip, req.params.headUuid);
     res.json({ widgets: (widgets || []).map(normalizeWidgetForPreview) });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Extract an operator-facing input NUMBER from a group. Names typically embed a number
+// ("IN 12", "Input 12", "12"); we grab the first integer we find. Falls back to null.
+function groupNumber(g) {
+  const m = (g && typeof g.name === 'string') ? g.name.match(/\d+/) : null;
+  return m ? parseInt(m[0], 10) : null;
+}
+
+// Input groups available on a head's card, with a parsed number and the stream UUIDs.
+app.get('/api/panel/cards/:cardId/heads/:headUuid/groups', async (req, res) => {
+  const r = await resolveHeadRequest(req, res);
+  if (!r) return;
+  const { card } = r;
+  try {
+    const groups = await getInputGroups(card.ip);
+    const out = (groups || []).map((g) => ({
+      uuid: g.uuid,
+      name: g.name || '',
+      number: groupNumber(g),
+      videoUuid: g.videoUuid || '',
+      audioUuid: g.audioUuid || '',
+      dataUuid: g.dataUuid || '',
+    }));
+    res.json({ groups: out });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Repoint a window (widget) to a different input group. LIVE EDIT to the on-air board.
+// Body: { groupUuid }. Authorized to the specific assigned head.
+app.post('/api/panel/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/group', async (req, res) => {
+  const r = await resolveHeadRequest(req, res);
+  if (!r) return;
+  const { card } = r;
+  const { groupUuid } = req.body || {};
+  if (!groupUuid) return res.status(400).json({ error: 'groupUuid is required' });
+  try {
+    const result = await setWidgetGroup(card.ip, req.params.headUuid, req.params.widgetUuid, groupUuid);
+    res.json({ ok: true, result });
   } catch (e) { sendErr(res, e); }
 });
 

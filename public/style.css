@@ -204,6 +204,64 @@ body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
   body.strip .step .dot { font-size: 11px; }
 }
 
+/* ---- Fullscreen input-group editor ---- */
+.card-with-preview { position: relative; }
+.expand-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 40px; height: 40px; border-radius: 8px;
+  background: rgba(4,7,11,0.7); border: 1px solid var(--line); color: var(--ink);
+  font-size: 20px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+}
+.expand-btn:active { transform: scale(0.94); }
+
+.fs-overlay {
+  position: fixed; inset: 0; background: var(--bg); z-index: 80;
+  display: none; flex-direction: column;
+}
+.fs-overlay.show { display: flex; }
+.fs-header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.fs-header .fs-title { font-size: 18px; font-weight: 600; }
+.fs-header .fs-hint { color: var(--ink-dim); font-size: 13px; }
+.fs-header .grow { flex: 1; }
+.fs-body { flex: 1; padding: 18px; display: grid; place-items: center; overflow: hidden; }
+
+/* 16:9 stage that scales to fit while preserving aspect ratio */
+.fs-stage {
+  position: relative; aspect-ratio: 16 / 9; width: 100%; max-height: 100%;
+  background: #05070b; border: 1px solid var(--line); border-radius: 8px;
+  margin: 0 auto;
+}
+.fs-window {
+  position: absolute; background: rgba(63,182,255,0.08);
+  border: 2px solid var(--accent); border-radius: 4px; color: var(--ink);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; cursor: pointer; padding: 4px; overflow: hidden;
+}
+.fs-window:active { background: rgba(63,182,255,0.18); }
+.fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
+.fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* ---- Numeric keypad ---- */
+.keypad { position: fixed; inset: 0; background: rgba(4,7,11,0.72); z-index: 90;
+  display: none; place-items: center; backdrop-filter: blur(2px); }
+.keypad.show { display: grid; }
+.keypad-sheet { width: min(360px, 92vw); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+.kp-display { font-size: 34px; font-weight: 600; text-align: center;
+  background: var(--panel-2); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+.kp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.kp-key { min-height: 64px; font-size: 24px; font-weight: 600; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); cursor: pointer; }
+.kp-key:active { transform: scale(0.96); }
+.kp-key.kp-util { font-size: 16px; color: var(--ink-dim); }
+.kp-actions { display: flex; gap: 12px; margin-top: 14px; }
+.kp-actions .btn { flex: 1; }
+
 /* Focus visibility for accessibility even on touch. */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

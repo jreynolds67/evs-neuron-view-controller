@@ -151,6 +151,35 @@ export async function getHeadWidgets(ip, headUuid) {
   return boardFetch(ip, `/heads/${headUuid}/widgets/`);
 }
 
+// Input groups on a board: each group bundles a video/audio/data stream under a name
+// (the name typically carries the operator-facing input NUMBER).
+export async function getInputGroups(ip) {
+  return boardFetch(ip, '/inputs/groups');
+}
+
+// One widget's full definition (needed before repointing its group).
+export async function getHeadWidget(ip, headUuid, widgetUuid) {
+  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`);
+}
+
+// Repoint a single widget to a different input group. Fetches the current widget, swaps
+// ONLY groupUuid, and PUTs it back as a WidgetChange (preserving geometry/elements/etc).
+// This is a live edit to the on-air board.
+export async function setWidgetGroup(ip, headUuid, widgetUuid, groupUuid) {
+  const w = await getHeadWidget(ip, headUuid, widgetUuid);
+  const change = {
+    elements: w.elements || [],
+    geometry: w.geometry,
+    groupUuid,
+    name: w.name || '',
+    properties: w.properties || { borderColor: '', borderSize: '' },
+  };
+  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
+    method: 'PUT',
+    body: JSON.stringify(change),
+  });
+}
+
 // Reduce a raw widget (WidgetGet) to the minimal shape the preview renderer needs:
 // its geometry, and its elements' geometry + type + a couple of display hints. Keeps
 // the payload small and hides board internals from the browser.
@@ -192,6 +221,7 @@ export function normalizeWidgetForPreview(w) {
   return {
     uuid: w.uuid,
     name: w.name || '',
+    groupUuid: w.groupUuid || '',
     geometry: geom(w.geometry),
     elements: (w.elements || [])
       .filter((el) => el && el.visible !== false)

@@ -190,11 +190,24 @@ async function renderHeads() {
       <div class="card-body">
         <span class="k"></span>
         <span class="uuid mono"></span>
-      </div>`;
+      </div>
+      <button class="expand-btn" title="Full screen inputs" aria-label="Full screen inputs">⤢</button>`;
     card.querySelector('.k').textContent = h.label || 'Head';
     if (state.showUuids) card.querySelector('.uuid').textContent = h.headUuid;
     else card.querySelector('.uuid').remove();
     card.addEventListener('click', () => { state.head = h; connectWs(h.cardId); renderSnapshots(); });
+
+    // Fullscreen input-group editor is 1920x1080 only — not on the strip.
+    const expand = card.querySelector('.expand-btn');
+    if (state.panel.layout === 'strip') {
+      expand.remove();
+    } else {
+      expand.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't trigger the card's snapshot navigation
+        openFullscreen(h);
+      });
+    }
+
     grid.appendChild(card);
     // Lazy-load the live layout thumbnail for this head.
     loadPreviewInto(
@@ -380,11 +393,135 @@ function setLink(ok) {
   p.className = 'pill ' + (ok ? 'ok' : 'bad');
 }
 
+// ---- Fullscreen input-group editor (1080 layout only) ---------------------
+// Shows a head's windows large; each window displays its current input group number and
+// is tappable to enter a new number, which repoints that window's widget to the matching
+// input group on the live board.
+
+let fsState = null; // { head, widgets, groups }
+
+async function openFullscreen(head) {
+  const ov = $('fsOverlay');
+  ov.classList.add('show');
+  $('fsTitle').textContent = head.label || 'Head';
+  $('fsBody').innerHTML = '<div class="preview-loading" style="padding:40px">Loading windows…</div>';
+
+  try {
+    const [{ widgets }, { groups }] = await Promise.all([
+      api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
+      api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
+    ]);
+    fsState = { head, widgets: widgets || [], groups: groups || [] };
+    renderFullscreen();
+  } catch (e) {
+    $('fsBody').innerHTML = `<div class="preview-note err" style="padding:40px">${e.message}</div>`;
+  }
+}
+
+function closeFullscreen() {
+  $('fsOverlay').classList.remove('show');
+  fsState = null;
+}
+
+function groupByUuid(uuid) {
+  return fsState.groups.find((g) => g.uuid === uuid) || null;
+}
+function groupByNumber(num) {
+  return fsState.groups.find((g) => g.number === num) || null;
+}
+
+function renderFullscreen() {
+  const body = $('fsBody');
+  body.innerHTML = '';
+  const { widgets } = fsState;
+
+  // 16:9 stage that fills the available space.
+  const stage = document.createElement('div');
+  stage.className = 'fs-stage';
+  body.appendChild(stage);
+
+  if (!widgets.length) {
+    stage.innerHTML = '<div class="preview-empty-text" style="display:grid;place-items:center;height:100%">No windows on this head</div>';
+    return;
+  }
+
+  widgets.forEach((wd) => {
+    const g = wd.geometry || {};
+    const win = document.createElement('button');
+    win.className = 'fs-window';
+    win.style.left = `${(g.x || 0) * 100}%`;
+    win.style.top = `${(g.y || 0) * 100}%`;
+    win.style.width = `${(g.width || 0) * 100}%`;
+    win.style.height = `${(g.height || 0) * 100}%`;
+
+    const grp = groupByUuid(wd.groupUuid);
+    const label = grp
+      ? (grp.number != null ? String(grp.number) : (grp.name || '—'))
+      : '—';
+    win.innerHTML = `<span class="fs-win-num"></span><span class="fs-win-name"></span>`;
+    win.querySelector('.fs-win-num').textContent = label;
+    win.querySelector('.fs-win-name').textContent = grp ? (grp.name || '') : 'unassigned';
+    win.addEventListener('click', () => promptGroupChange(wd));
+    stage.appendChild(win);
+  });
+}
+
+function promptGroupChange(widget) {
+  const current = groupByUuid(widget.groupUuid);
+  const curNum = current && current.number != null ? current.number : '';
+  // Simple numeric prompt keypad overlay.
+  openKeypad(curNum, async (entered) => {
+    const num = parseInt(entered, 10);
+    if (Number.isNaN(num)) return;
+    const target = groupByNumber(num);
+    if (!target) {
+      toast(`No input group numbered ${num} on this card`, 'err');
+      return;
+    }
+    try {
+      await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${widget.uuid}/group`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupUuid: target.uuid }),
+      });
+      // Update local state and re-render so the window shows the new number immediately.
+      widget.groupUuid = target.uuid;
+      renderFullscreen();
+      toast(`Window set to input ${num}${target.name ? ' (' + target.name + ')' : ''}`, 'ok');
+    } catch (e) {
+      toast(e.message, 'err');
+    }
+  });
+}
+
+// Touch numeric keypad (no hardware keyboard on the panels).
+function openKeypad(initial, onSubmit) {
+  const kp = $('keypad');
+  kp.classList.add('show');
+  let val = String(initial || '');
+  const disp = $('kpDisplay');
+  const draw = () => { disp.textContent = val || '—'; };
+  draw();
+
+  kp.querySelectorAll('[data-key]').forEach((btn) => {
+    btn.onclick = () => {
+      const k = btn.dataset.key;
+      if (k === 'clear') val = '';
+      else if (k === 'back') val = val.slice(0, -1);
+      else if (val.length < 4) val += k;
+      draw();
+    };
+  });
+  $('kpCancel').onclick = () => kp.classList.remove('show');
+  $('kpOk').onclick = () => { kp.classList.remove('show'); onSubmit(val); };
+}
+
 // ---- Boot -----------------------------------------------------------------
 
 async function boot() {
   $('backBtn').addEventListener('click', back);
   $('restartBtn').addEventListener('click', restart);
+  $('fsClose').addEventListener('click', closeFullscreen);
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
 
