@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 
 import {
   loadConfig, saveConfig, getCardById, getPanelByIp,
-  getPanelHead, allowedSnapshotsForHead,
+  getPanelHead, resolveAllowedSnapshots, getHeadFilter,
 } from './config.js';
 import {
   getSelf, getSnapshotInfo, getSnapshotMeta, getHeads,
@@ -115,11 +115,11 @@ app.get('/api/panel/me', async (req, res) => {
 app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
-  const { card, panelHead } = r;
+  const { config, card, panelHead } = r;
 
   try {
     const info = await getSnapshotInfo(card.ip);
-    const allow = allowedSnapshotsForHead(panelHead);
+    const allow = resolveAllowedSnapshots(config, panelHead, req.params.cardId, req.params.headUuid);
     const includeDeleted = req.query.includeDeleted === '1';
 
     // Normalise entries (string UUIDs or richer objects) to a consistent shape.
@@ -281,7 +281,7 @@ app.post('/api/panel/cards/:cardId/snapshots/:snapUuid/restore', async (req, res
   if (!card) return res.status(404).json({ error: 'Unknown card' });
 
   // Re-check the snapshot is actually permitted for this head before firing.
-  const allow = allowedSnapshotsForHead(panelHead);
+  const allow = resolveAllowedSnapshots(config, panelHead, req.params.cardId, targetHeadUuid);
   if (allow && !allow.includes(req.params.snapUuid)) {
     return res.status(403).json({ error: 'Snapshot not permitted for this head on this panel' });
   }
@@ -306,6 +306,7 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Config must have cards[] and panels[]' });
   }
   next.settings = { showUuids: true, ...(next.settings || {}) };
+  if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
   await saveConfig(next);
   res.json({ ok: true });

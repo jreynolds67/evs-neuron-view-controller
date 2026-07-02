@@ -26,7 +26,7 @@ const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 //   ]
 // }
 
-const DEFAULT_CONFIG = { cards: [], panels: [], settings: { showUuids: true } };
+const DEFAULT_CONFIG = { cards: [], panels: [], headFilters: {}, settings: { showUuids: true } };
 
 let cache = null;
 
@@ -43,9 +43,12 @@ export async function loadConfig() {
     cache = {
       ...DEFAULT_CONFIG,
       ...parsed,
+      headFilters: parsed.headFilters || {},
       settings: { ...DEFAULT_CONFIG.settings, ...(parsed.settings || {}) },
     };
     (cache.panels || []).forEach(migratePanel);
+    // Discard obsolete per-panel snapshot filters — filtering is global per head now.
+    (cache.panels || []).forEach((p) => (p.heads || []).forEach((h) => { delete h.allowedSnapshots; }));
   } catch {
     cache = { ...DEFAULT_CONFIG, settings: { ...DEFAULT_CONFIG.settings } };
   }
@@ -92,17 +95,22 @@ export function getPanelHead(panel, cardId, headUuid) {
   return panel.heads.find((h) => h.cardId === cardId && h.headUuid === headUuid) || null;
 }
 
-// Allowed snapshot UUID list for an assigned head, or null = allow all.
-export function allowedSnapshotsForHead(panelHead) {
-  if (!panelHead) return null;
-  const list = panelHead.allowedSnapshots;
+// Snapshot filtering is now GLOBAL per head, keyed by "cardId::headUuid" in
+// config.headFilters. A panel-head may set showAllSnapshots:true to OVERRIDE the global
+// filter and show everything for that head on that panel.
+//
+// Resolution: returns the allowed snapshot UUID list, or null = allow all.
+//   - panelHead.showAllSnapshots === true  -> null (all allowed, overrides global)
+//   - otherwise -> the global filter for that head (or null if none defined)
+export function resolveAllowedSnapshots(config, panelHead, cardId, headUuid) {
+  if (panelHead && panelHead.showAllSnapshots === true) return null;
+  const filters = config.headFilters || {};
+  const list = filters[`${cardId}::${headUuid}`];
   return Array.isArray(list) && list.length ? list : null;
 }
 
-// Legacy support: old per-(card,head) filter lookup, used only during migration display.
-export function allowedSnapshotsFor(panel, cardId, headUuid) {
-  if (!panel || !panel.snapshotFilters) return null;
-  const key = `${cardId}::${headUuid}`;
-  const list = panel.snapshotFilters[key];
+// Read/write the global per-head filter list.
+export function getHeadFilter(config, cardId, headUuid) {
+  const list = (config.headFilters || {})[`${cardId}::${headUuid}`];
   return Array.isArray(list) ? list : null;
 }

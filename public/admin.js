@@ -24,9 +24,10 @@ async function loadConfig() {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
     config = await res.json();
     config.cards ||= []; config.panels ||= [];
+    config.headFilters ||= {};
     config.settings ||= { showUuids: true };
     $('showUuids').checked = config.settings.showUuids !== false;
-    renderCards(); renderPanels();
+    renderCards(); renderPanels(); renderHeadFilterCards();
     $('loadState').textContent = 'Loaded';
   } catch (e) { $('loadState').textContent = 'Error: ' + e.message; }
 }
@@ -63,6 +64,7 @@ function renderCards() {
     config.cards.splice(+e.target.dataset.del, 1); renderCards(); renderPanels();
   }));
   if (typeof renderReachRow === 'function') renderReachRow();
+  if (typeof renderHeadFilterCards === 'function') renderHeadFilterCards();
 }
 
 $('addCard').addEventListener('click', () => {
@@ -160,14 +162,20 @@ function renderHeadList(pi) {
         <span class="order-pos">${i + 1}</span>
         <input class="ah-label" placeholder="${h.boardName || 'Display label'}" value="${h.label || ''}">
         <span class="ah-source muted"></span>
+        <label class="ah-all" title="Show all snapshots on this panel, ignoring the global head filter">
+          <input type="checkbox" class="ah-all-cb" ${h.showAllSnapshots ? 'checked' : ''}>
+          <span>All snapshots</span>
+        </label>
         <button class="btn sm ghost ah-up" ${i === 0 ? 'disabled' : ''}>↑</button>
         <button class="btn sm ghost ah-down" ${i === p.heads.length - 1 ? 'disabled' : ''}>↓</button>
         <button class="btn sm del ah-del">Remove</button>
-      </div>
-      <div class="ah-filter" id="ahFilter-${pi}-${i}"></div>`;
+      </div>`;
     row.querySelector('.ah-source').textContent =
       `${card ? (card.label || card.id) : h.cardId + ' (missing card)'} · ${h.boardName || h.headUuid}`;
     row.querySelector('.ah-label').addEventListener('input', (e) => { h.label = e.target.value; });
+    row.querySelector('.ah-all-cb').addEventListener('change', (e) => {
+      if (e.target.checked) h.showAllSnapshots = true; else delete h.showAllSnapshots;
+    });
     row.querySelector('.ah-up').addEventListener('click', () => {
       [p.heads[i - 1], p.heads[i]] = [p.heads[i], p.heads[i - 1]]; renderHeadList(pi);
     });
@@ -178,57 +186,6 @@ function renderHeadList(pi) {
       p.heads.splice(i, 1); renderHeadList(pi);
     });
     host.appendChild(row);
-    renderHeadFilter(pi, i);
-  });
-}
-
-// Collapsible snapshot filter for one assigned head.
-function renderHeadFilter(pi, i) {
-  const p = config.panels[pi];
-  const h = p.heads[i];
-  const host = $(`ahFilter-${pi}-${i}`); host.innerHTML = '';
-
-  const det = document.createElement('details');
-  det.className = 'head-filter';
-  const sum = document.createElement('summary');
-  const countText = () => (h.allowedSnapshots && h.allowedSnapshots.length)
-    ? `${h.allowedSnapshots.length} allowed` : 'all allowed';
-  sum.innerHTML = `<span class="hf-name">Snapshot filter</span> <span class="hf-count muted"></span>`;
-  sum.querySelector('.hf-count').textContent = `— ${countText()}`;
-  det.appendChild(sum);
-
-  const body = document.createElement('div');
-  body.className = 'filterbox';
-  body.innerHTML = `<div class="snaplist" data-snaps></div>`;
-  det.appendChild(body);
-  host.appendChild(det);
-
-  // Load snapshots for this card lazily when the section is first opened.
-  let loaded = false;
-  det.addEventListener('toggle', async () => {
-    if (!det.open || loaded) return;
-    loaded = true;
-    const list = body.querySelector('[data-snaps]');
-    list.innerHTML = '<div class="muted">Loading snapshots…</div>';
-    try {
-      const snaps = (await probeCardSnaps(h.cardId)).slice().sort(byName);
-      list.innerHTML = '';
-      if (!snaps.length) { list.innerHTML = '<div class="muted">No snapshots on this card.</div>'; return; }
-      snaps.forEach((s) => {
-        const checked = (h.allowedSnapshots || []).includes(s.uuid);
-        const lab = document.createElement('label');
-        lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
-        lab.querySelector('input').addEventListener('change', (e) => {
-          let arr = h.allowedSnapshots ? [...h.allowedSnapshots] : [];
-          if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
-          if (arr.length) h.allowedSnapshots = arr; else delete h.allowedSnapshots;
-          sum.querySelector('.hf-count').textContent = `— ${countText()}`;
-        });
-        list.appendChild(lab);
-      });
-    } catch (e) {
-      list.innerHTML = `<div class="muted" style="color:var(--danger)">${e.message}</div>`;
-    }
   });
 }
 
@@ -297,6 +254,68 @@ $('addPanel').addEventListener('click', () => {
   renderPanels();
 });
 
+// ---- Global per-head snapshot filters -------------------------------------
+
+function renderHeadFilterCards() {
+  const sel = $('hfCard');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— select a card —</option>' +
+    config.cards.filter(c => c.id).map(c => `<option value="${c.id}">${c.label || c.id}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+$('hfCard').addEventListener('change', () => renderGlobalHeadFilters($('hfCard').value));
+
+async function renderGlobalHeadFilters(cardId) {
+  const host = $('hfHeads'); host.innerHTML = '';
+  const stateEl = $('hfState');
+  if (!cardId) { stateEl.textContent = ''; return; }
+  stateEl.textContent = 'Loading…';
+  config.headFilters ||= {};
+  try {
+    const [heads, snaps] = await Promise.all([
+      probeCardHeads(cardId),
+      probeCardSnaps(cardId),
+    ]);
+    stateEl.textContent = '';
+    const sortedHeads = heads.slice().sort(byName);
+    const sortedSnaps = snaps.slice().sort(byName);
+    if (!sortedHeads.length) { host.innerHTML = '<div class="muted">No heads on this card.</div>'; return; }
+
+    sortedHeads.forEach((h) => {
+      const key = `${cardId}::${h.uuid}`;
+      const det = document.createElement('details');
+      det.className = 'head-filter';
+      const sum = document.createElement('summary');
+      const countText = () => {
+        const arr = config.headFilters[key];
+        return arr && arr.length ? `${arr.length} allowed` : 'all allowed';
+      };
+      sum.innerHTML = `<span class="hf-name">${h.name || h.uuid}</span> <span class="hf-count muted"></span>`;
+      sum.querySelector('.hf-count').textContent = `— ${countText()}`;
+      det.appendChild(sum);
+
+      const list = document.createElement('div'); list.className = 'snaplist';
+      sortedSnaps.forEach((s) => {
+        const checked = (config.headFilters[key] || []).includes(s.uuid);
+        const lab = document.createElement('label');
+        lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
+        lab.querySelector('input').addEventListener('change', (e) => {
+          let arr = config.headFilters[key] ? [...config.headFilters[key]] : [];
+          if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
+          if (arr.length) config.headFilters[key] = arr; else delete config.headFilters[key];
+          sum.querySelector('.hf-count').textContent = `— ${countText()}`;
+        });
+        list.appendChild(lab);
+      });
+      det.appendChild(list);
+      host.appendChild(det);
+    });
+  } catch (e) {
+    stateEl.textContent = 'Error: ' + e.message;
+  }
+}
+
 $('reload').addEventListener('click', loadConfig);
 $('save').addEventListener('click', saveConfig);
 
@@ -336,9 +355,10 @@ $('importFile').addEventListener('change', async (e) => {
 
     config = parsed;
     config.cards ||= []; config.panels ||= [];
+    config.headFilters ||= {};
     config.settings ||= { showUuids: true };
     $('showUuids').checked = config.settings.showUuids !== false;
-    renderCards(); renderPanels();
+    renderCards(); renderPanels(); renderHeadFilterCards();
     $('saveState').textContent = 'Imported — review and Save config to apply';
     toast('Backup loaded into editor. Review, then Save config.', 'ok');
   } catch (err) {
