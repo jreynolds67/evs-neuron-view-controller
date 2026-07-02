@@ -289,7 +289,7 @@ app.get('/api/admin/cards/:cardId/snapshots', requireAdmin, async (req, res) => 
     const info = await getSnapshotInfo(card.ip);
     const entries = (info.snapshots || [])
       .map(normalizeSnapshotEntry)
-      .filter((e) => e.uuid);
+      .filter((e) => e.uuid && e.deleted !== true); // hide board-deleted (tombstoned) snapshots
     const metas = await Promise.all(entries.map(async (e) => {
       if (e.inlineMeta) return { uuid: e.uuid, name: e.name || e.uuid };
       try { const m = await getSnapshotMeta(card.ip, e.uuid); return { uuid: e.uuid, name: m.name || e.uuid }; }
