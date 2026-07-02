@@ -447,7 +447,7 @@ function renderFullscreen() {
 
   widgets.forEach((wd) => {
     const g = wd.geometry || {};
-    const win = document.createElement('button');
+    const win = document.createElement('div');
     win.className = 'fs-window';
     win.style.left = `${(g.x || 0) * 100}%`;
     win.style.top = `${(g.y || 0) * 100}%`;
@@ -458,62 +458,53 @@ function renderFullscreen() {
     const label = grp
       ? (grp.number != null ? String(grp.number) : (grp.name || '—'))
       : '—';
-    win.innerHTML = `<span class="fs-win-num"></span><span class="fs-win-name"></span>`;
+    win.innerHTML = `
+      <span class="fs-win-num"></span>
+      <input class="fs-win-input mono" inputmode="numeric" maxlength="4" />
+      <span class="fs-win-name"></span>`;
     win.querySelector('.fs-win-num').textContent = label;
     win.querySelector('.fs-win-name').textContent = grp ? (grp.name || '') : 'unassigned';
-    win.addEventListener('click', () => promptGroupChange(wd));
+
+    const numEl = win.querySelector('.fs-win-num');
+    const input = win.querySelector('.fs-win-input');
+
+    // Tap/click the window → immediately begin keyboard entry.
+    win.addEventListener('click', () => {
+      if (win.classList.contains('editing')) return;
+      win.classList.add('editing');
+      input.value = '';
+      input.placeholder = grp && grp.number != null ? String(grp.number) : '';
+      input.focus();
+    });
+
+    const commit = async () => {
+      const raw = input.value.trim();
+      win.classList.remove('editing');
+      if (raw === '') return; // no change
+      const num = parseInt(raw, 10);
+      if (Number.isNaN(num)) { toast('Enter a number', 'err'); return; }
+      const target = groupByNumber(num);
+      if (!target) { toast(`No input group numbered ${num} on this card`, 'err'); return; }
+      try {
+        await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${wd.uuid}/group`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupUuid: target.uuid }),
+        });
+        wd.groupUuid = target.uuid;
+        renderFullscreen();
+        toast(`Window set to input ${num}${target.name ? ' (' + target.name + ')' : ''}`, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); win.classList.remove('editing'); }
+    });
+    input.addEventListener('blur', () => { win.classList.remove('editing'); });
+
     stage.appendChild(win);
   });
-}
-
-function promptGroupChange(widget) {
-  const current = groupByUuid(widget.groupUuid);
-  const curNum = current && current.number != null ? current.number : '';
-  // Simple numeric prompt keypad overlay.
-  openKeypad(curNum, async (entered) => {
-    const num = parseInt(entered, 10);
-    if (Number.isNaN(num)) return;
-    const target = groupByNumber(num);
-    if (!target) {
-      toast(`No input group numbered ${num} on this card`, 'err');
-      return;
-    }
-    try {
-      await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${widget.uuid}/group`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupUuid: target.uuid }),
-      });
-      // Update local state and re-render so the window shows the new number immediately.
-      widget.groupUuid = target.uuid;
-      renderFullscreen();
-      toast(`Window set to input ${num}${target.name ? ' (' + target.name + ')' : ''}`, 'ok');
-    } catch (e) {
-      toast(e.message, 'err');
-    }
-  });
-}
-
-// Touch numeric keypad (no hardware keyboard on the panels).
-function openKeypad(initial, onSubmit) {
-  const kp = $('keypad');
-  kp.classList.add('show');
-  let val = String(initial || '');
-  const disp = $('kpDisplay');
-  const draw = () => { disp.textContent = val || '—'; };
-  draw();
-
-  kp.querySelectorAll('[data-key]').forEach((btn) => {
-    btn.onclick = () => {
-      const k = btn.dataset.key;
-      if (k === 'clear') val = '';
-      else if (k === 'back') val = val.slice(0, -1);
-      else if (val.length < 4) val += k;
-      draw();
-    };
-  });
-  $('kpCancel').onclick = () => kp.classList.remove('show');
-  $('kpOk').onclick = () => { kp.classList.remove('show'); onSubmit(val); };
 }
 
 // ---- Boot -----------------------------------------------------------------
