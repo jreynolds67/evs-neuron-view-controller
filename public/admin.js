@@ -125,7 +125,6 @@ function renderPanels() {
         <div id="headList-${pi}" style="margin-top:6px"></div>
         <div class="inline" style="margin-top:8px">
           <button class="btn sm" data-addhead="${pi}">Add head</button>
-          <button class="btn sm ghost" data-refreshnames="${pi}">Refresh names</button>
           <span class="muted" id="addHeadState-${pi}"></span>
         </div>
         <div id="headPicker-${pi}"></div>
@@ -139,7 +138,6 @@ function renderPanels() {
       config.panels.splice(pi, 1); renderPanels();
     });
     box.querySelector(`[data-addhead="${pi}"]`).addEventListener('click', () => openHeadPicker(pi));
-    box.querySelector(`[data-refreshnames="${pi}"]`).addEventListener('click', () => refreshHeadNames(pi));
 
     renderHeadList(pi);
   });
@@ -257,30 +255,37 @@ $('addPanel').addEventListener('click', () => {
   renderPanels();
 });
 
-// Re-poll the boards for current head names and update the cached boardName on each
-// assigned head (matched by UUID, which never changes on rename). Heads whose UUID is no
-// longer present on the board are flagged as missing. This only touches the display name
-// cache — assignments, filters, and ordering are keyed by UUID and are untouched.
-async function refreshHeadNames(pi) {
-  const p = config.panels[pi];
-  const stateEl = $(`addHeadState-${pi}`);
-  const cardIds = [...new Set(p.heads.map((h) => h.cardId))];
-  if (!cardIds.length) { stateEl.textContent = 'No heads to refresh.'; return; }
+// Re-poll every board referenced by any panel head, and update cached board names across
+// all panels (matched by UUID, which never changes on rename). Heads whose UUID is no
+// longer present are flagged missing. Only touches display-name cache — assignments,
+// filters, and ordering are keyed by UUID and untouched.
+async function refreshAllHeadNames() {
+  const stateEl = $('refreshAllState');
+  const cardIds = [...new Set(
+    config.panels.flatMap((p) => (p.heads || []).map((h) => h.cardId))
+  )];
+  if (!cardIds.length) { stateEl.textContent = 'No assigned heads to refresh.'; return; }
   stateEl.textContent = 'Refreshing…';
 
   // Bypass the probe cache so we read live names.
   cardIds.forEach((id) => cardHeadsCache.delete(id));
 
-  let updated = 0, missing = 0;
-  try {
-    const liveByCard = new Map();
-    for (const cardId of cardIds) {
+  let updated = 0, missing = 0, failedCards = [];
+  const liveByCard = new Map();
+  for (const cardId of cardIds) {
+    try {
       const heads = await probeCardHeads(cardId); // repopulates cache fresh
       liveByCard.set(cardId, new Map(heads.map((h) => [h.uuid, h.name || ''])));
+    } catch (e) {
+      failedCards.push(cardId);
     }
-    p.heads.forEach((h) => {
+  }
+
+  config.panels.forEach((p) => {
+    (p.heads || []).forEach((h) => {
       const live = liveByCard.get(h.cardId);
-      if (live && live.has(h.headUuid)) {
+      if (!live) return; // card poll failed; leave as-is
+      if (live.has(h.headUuid)) {
         const name = live.get(h.headUuid);
         if (name && name !== h.boardName) { h.boardName = name; updated++; }
         delete h.missing;
@@ -288,14 +293,19 @@ async function refreshHeadNames(pi) {
         h.missing = true; missing++;
       }
     });
-    renderHeadList(pi);
-    stateEl.textContent = `Updated ${updated} name${updated === 1 ? '' : 's'}`
-      + (missing ? `, ${missing} head${missing === 1 ? '' : 's'} no longer on board` : '')
-      + '. Save config to keep.';
-  } catch (e) {
-    stateEl.textContent = 'Error: ' + e.message;
-  }
+  });
+
+  renderPanels();
+  // Refresh the global filter section's shown names too, if a card is selected there.
+  if ($('hfCard').value) renderGlobalHeadFilters($('hfCard').value);
+
+  stateEl.textContent = `Updated ${updated} name${updated === 1 ? '' : 's'}`
+    + (missing ? `, ${missing} head${missing === 1 ? '' : 's'} not found on board` : '')
+    + (failedCards.length ? `, ${failedCards.length} card${failedCards.length === 1 ? '' : 's'} unreachable` : '')
+    + '. Save config to keep.';
 }
+
+$('refreshAllNames').addEventListener('click', refreshAllHeadNames);
 
 // ---- Global per-head snapshot filters -------------------------------------
 
