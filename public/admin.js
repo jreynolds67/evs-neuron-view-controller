@@ -125,6 +125,7 @@ function renderPanels() {
         <div id="headList-${pi}" style="margin-top:6px"></div>
         <div class="inline" style="margin-top:8px">
           <button class="btn sm" data-addhead="${pi}">Add head</button>
+          <button class="btn sm ghost" data-refreshnames="${pi}">Refresh names</button>
           <span class="muted" id="addHeadState-${pi}"></span>
         </div>
         <div id="headPicker-${pi}"></div>
@@ -138,6 +139,7 @@ function renderPanels() {
       config.panels.splice(pi, 1); renderPanels();
     });
     box.querySelector(`[data-addhead="${pi}"]`).addEventListener('click', () => openHeadPicker(pi));
+    box.querySelector(`[data-refreshnames="${pi}"]`).addEventListener('click', () => refreshHeadNames(pi));
 
     renderHeadList(pi);
   });
@@ -171,7 +173,8 @@ function renderHeadList(pi) {
         <button class="btn sm del ah-del">Remove</button>
       </div>`;
     row.querySelector('.ah-source').textContent =
-      `${card ? (card.label || card.id) : h.cardId + ' (missing card)'} · ${h.boardName || h.headUuid}`;
+      `${card ? (card.label || card.id) : h.cardId + ' (missing card)'} · ${h.boardName || h.headUuid}`
+      + (h.missing ? ' · ⚠ not found on board' : '');
     row.querySelector('.ah-label').addEventListener('input', (e) => { h.label = e.target.value; });
     row.querySelector('.ah-all-cb').addEventListener('change', (e) => {
       if (e.target.checked) h.showAllSnapshots = true; else delete h.showAllSnapshots;
@@ -253,6 +256,46 @@ $('addPanel').addEventListener('click', () => {
   config.panels.push({ ip: '', label: '', layout: '1080', heads: [] });
   renderPanels();
 });
+
+// Re-poll the boards for current head names and update the cached boardName on each
+// assigned head (matched by UUID, which never changes on rename). Heads whose UUID is no
+// longer present on the board are flagged as missing. This only touches the display name
+// cache — assignments, filters, and ordering are keyed by UUID and are untouched.
+async function refreshHeadNames(pi) {
+  const p = config.panels[pi];
+  const stateEl = $(`addHeadState-${pi}`);
+  const cardIds = [...new Set(p.heads.map((h) => h.cardId))];
+  if (!cardIds.length) { stateEl.textContent = 'No heads to refresh.'; return; }
+  stateEl.textContent = 'Refreshing…';
+
+  // Bypass the probe cache so we read live names.
+  cardIds.forEach((id) => cardHeadsCache.delete(id));
+
+  let updated = 0, missing = 0;
+  try {
+    const liveByCard = new Map();
+    for (const cardId of cardIds) {
+      const heads = await probeCardHeads(cardId); // repopulates cache fresh
+      liveByCard.set(cardId, new Map(heads.map((h) => [h.uuid, h.name || ''])));
+    }
+    p.heads.forEach((h) => {
+      const live = liveByCard.get(h.cardId);
+      if (live && live.has(h.headUuid)) {
+        const name = live.get(h.headUuid);
+        if (name && name !== h.boardName) { h.boardName = name; updated++; }
+        delete h.missing;
+      } else {
+        h.missing = true; missing++;
+      }
+    });
+    renderHeadList(pi);
+    stateEl.textContent = `Updated ${updated} name${updated === 1 ? '' : 's'}`
+      + (missing ? `, ${missing} head${missing === 1 ? '' : 's'} no longer on board` : '')
+      + '. Save config to keep.';
+  } catch (e) {
+    stateEl.textContent = 'Error: ' + e.message;
+  }
+}
 
 // ---- Global per-head snapshot filters -------------------------------------
 
