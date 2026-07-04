@@ -309,6 +309,8 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
   await saveConfig(next);
+  // Tell every connected panel to reload so config changes apply immediately.
+  broadcastControl({ type: 'reload' });
   res.json({ ok: true });
 });
 
@@ -420,8 +422,43 @@ function ensureUpstream(cardId, boardIp) {
   return entry;
 }
 
+// Panels open a "control" WS on load (ws?control=1) and hold it for the whole session.
+// The server broadcasts small JSON messages down it — currently just { type:'reload' }
+// after a config save, so panels refresh without anyone touching them.
+const controlClients = new Set();
+
+function broadcastControl(msg) {
+  const data = JSON.stringify(msg);
+  for (const c of controlClients) {
+    if (c.readyState === WebSocket.OPEN) { try { c.send(data); } catch {} }
+  }
+}
+
+// Keepalive: NAT/switch timeouts can silently drop idle sockets, leaving "zombie"
+// connections that look open but would never receive a reload. Ping every 30s and
+// terminate any control client that didn't pong since the last round. The client
+// auto-reconnects, so this keeps the connected set honest.
+const controlKeepalive = setInterval(() => {
+  for (const c of controlClients) {
+    if (c.isAlive === false) { try { c.terminate(); } catch {} controlClients.delete(c); continue; }
+    c.isAlive = false;
+    try { c.ping(); } catch {}
+  }
+}, 30000);
+controlKeepalive.unref?.();
+
 wss.on('connection', async (client, req) => {
   const url = new URL(req.url, 'http://localhost');
+
+  // Control channel: every panel joins this on boot. No card, just broadcast target.
+  if (url.searchParams.get('control') === '1') {
+    client.isAlive = true;
+    client.on('pong', () => { client.isAlive = true; });
+    controlClients.add(client);
+    client.on('close', () => controlClients.delete(client));
+    return;
+  }
+
   const cardId = url.searchParams.get('card');
   const config = await loadConfig();
   const card = getCardById(config, cardId);
