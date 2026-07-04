@@ -429,9 +429,12 @@ const controlClients = new Set();
 
 function broadcastControl(msg) {
   const data = JSON.stringify(msg);
+  let sent = 0;
   for (const c of controlClients) {
-    if (c.readyState === WebSocket.OPEN) { try { c.send(data); } catch {} }
+    if (c.readyState === WebSocket.OPEN) { try { c.send(data); sent++; } catch {} }
   }
+  console.log(`[control] broadcast ${JSON.stringify(msg)} to ${sent}/${controlClients.size} client(s)`);
+  return sent;
 }
 
 // Keepalive: NAT/switch timeouts can silently drop idle sockets, leaving "zombie"
@@ -455,7 +458,11 @@ wss.on('connection', async (client, req) => {
     client.isAlive = true;
     client.on('pong', () => { client.isAlive = true; });
     controlClients.add(client);
-    client.on('close', () => controlClients.delete(client));
+    console.log(`[control] client connected (${controlClients.size} total)`);
+    client.on('close', () => {
+      controlClients.delete(client);
+      console.log(`[control] client disconnected (${controlClients.size} total)`);
+    });
     return;
   }
 
