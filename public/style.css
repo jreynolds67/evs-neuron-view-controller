@@ -76,22 +76,13 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
-/* When a panel defines an explicit grid, columns are width-capped (set inline) and the
-   grid is aligned top-left; extra space is left empty rather than stretching tiles. Cards
-   size to their content and keep a 16:9 preview so nothing is cropped. */
-/* Explicit grid = RIGID: cells are a fixed size (set inline) so empty rows/columns hold
-   the same space as populated ones, preserving each head's physical position. Cards fill
-   their cell; the preview takes the space above a fixed-height name footer. */
-.grid.head-grid-custom {
-  height: 100%; width: 100%;
-  justify-content: start;   /* fixed/capped columns leave dead space on the right */
-  align-content: start;     /* fixed rows stack from the top */
-  justify-items: start;     /* don't stretch items wider than their column */
-  grid-auto-columns: 0;     /* stray items don't create wide implicit columns */
-}
+/* Explicit grid: 1fr rows and columns share the stage equally, so empty rows/columns
+   still reserve space and heads keep their physical position. Cards fill their cell; the
+   preview scales within it, keeping 16:9 without cropping. */
+.grid.head-grid-custom { height: 100%; }
 .grid.head-grid-custom .card {
-  min-height: 0; height: 100%; width: 100%; align-self: stretch;
-  display: flex; flex-direction: column;
+  min-height: 0; height: 100%; align-self: stretch;
+  display: flex; flex-direction: column; overflow: hidden;
 }
 .grid.head-grid-custom .card-preview { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
 .grid.head-grid-custom .card-body { flex: 0 0 auto; }
