@@ -573,11 +573,13 @@ function tickClock() {
   const hhmmss = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   el.textContent = clockTz ? `${hhmmss} · ${clockTz}` : hhmmss;
 }
-(async function startClock() {
-  await syncClock();
-  tickClock();
+(function startClock() {
+  const el = document.getElementById('footerClock');
+  if (!el) { console.warn('[clock] #footerClock not found'); return; }
+  tickClock();                 // paint immediately with local time (offset 0)
   setInterval(tickClock, 1000);
-  setInterval(syncClock, 5 * 60 * 1000); // re-sync every 5 min
+  syncClock().then(tickClock); // then correct to container time when it returns
+  setInterval(syncClock, 5 * 60 * 1000);
 })();
 
 boot();

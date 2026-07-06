@@ -53,34 +53,66 @@ export async function runBackupNow() {
   const date = todayStamp();
   const written = [];
 
+  // Detect an export response that's actually JSON (error/manifest) rather than a real
+  // snapshot archive, so we don't save a tiny bogus file and call it a backup.
+  function looksLikeJson(buf) {
+    const head = buf.slice(0, 1).toString('latin1');
+    return head === '{' || head === '[';
+  }
+  // Pick a file extension from the board's Content-Disposition, if any.
+  function extFromDisposition(buf) {
+    const cd = buf.__cdisp || '';
+    const m = cd.match(/filename="?([^"]+)"?/i);
+    if (m) {
+      const dot = m[1].lastIndexOf('.');
+      if (dot > 0) return m[1].slice(dot); // includes leading dot
+    }
+    return ''; // unknown — leave extensionless rather than fake .bin
+  }
+
   try {
-    // Attempt 1: whole board as a single file.
+    // Enumerate all live snapshots once; the export needs explicit UUIDs (an empty list
+    // makes some firmware return an empty/manifest file — the 1.6 KB symptom).
+    const info = await getSnapshotInfo(ip);
+    const entries = (info.snapshots || [])
+      .map(normalizeSnapshotEntry)
+      .filter((e) => e.uuid && e.deleted !== true);
+    const allUuids = entries.map((e) => e.uuid);
+
+    if (!allUuids.length) {
+      status.lastRun = Date.now();
+      status.lastError = 'No snapshots on the board to back up';
+      status.lastFiles = [];
+      return status;
+    }
+
+    // Attempt 1: whole board as a single file, passing every UUID explicitly.
     let ok = false;
     try {
-      const buf = await exportSnapshots(ip, { pathWildcard: '*', snapshots: [] });
-      if (buf && buf.length) {
-        const file = `${date}__${label}__all.bin`;
+      const buf = await exportSnapshots(ip, { pathWildcard: '*', snapshots: allUuids });
+      if (buf && buf.length && !looksLikeJson(buf)) {
+        const file = `${date}__${label}__all${extFromDisposition(buf)}`;
         await writeAtomic(join(BACKUP_DIR, file), buf);
         written.push({ file, bytes: buf.length });
         ok = true;
+      } else if (buf && looksLikeJson(buf)) {
+        // Surface what the board actually said instead of silently saving it.
+        status.lastError = `Export returned JSON, not a file: ${buf.slice(0, 200).toString('utf8')}`;
       }
     } catch (e) {
       // fall through to per-folder
     }
 
-    // Attempt 2 (fallback): per-folder exports.
+    // Attempt 2 (fallback): per-folder exports, each scoped by path with its UUIDs.
     if (!ok) {
-      const info = await getSnapshotInfo(ip);
-      const entries = (info.snapshots || [])
-        .map(normalizeSnapshotEntry)
-        .filter((e) => e.uuid && e.deleted !== true);
       const folders = [...new Set(entries.map((e) => e.path || ''))];
       for (const folder of folders) {
         const wildcard = folder ? `${folder}*` : '*';
+        const uuids = entries.filter((e) => (e.path || '') === folder).map((e) => e.uuid);
         try {
-          const buf = await exportSnapshots(ip, { pathWildcard: wildcard, snapshots: [] });
-          if (buf && buf.length) {
-            const file = `${date}__${label}__${safe(folder || 'root')}.bin`;
+          const buf = await exportSnapshots(ip, { pathWildcard: wildcard, snapshots: uuids });
+          if (buf && buf.length && !looksLikeJson(buf)) {
+            const file = `${date}__${label}__${safe(folder || 'root')}${extFromDisposition(buf)}`;
             await writeAtomic(join(BACKUP_DIR, file), buf);
             written.push({ file, bytes: buf.length });
           }
@@ -91,7 +123,8 @@ export async function runBackupNow() {
     }
 
     status.lastRun = Date.now();
-    status.lastError = written.length ? null : 'Export produced no files';
+    if (written.length) status.lastError = null;
+    else if (!status.lastError) status.lastError = 'Export produced no valid files';
     status.lastFiles = written;
     console.log(`[backup] ${label} ${date}: wrote ${written.length} file(s)`);
     await prune(config);
@@ -107,6 +140,11 @@ async function writeAtomic(path, buf) {
   await rename(tmp, path);
 }
 
+// A backup file is recognised by its date-prefix name (YYYY-MM-DD__...), regardless of
+// extension — the board may hand back various file types (or none).
+const BACKUP_RE = /^\d{4}-\d{2}-\d{2}__.+/;
+function isBackupFile(f) { return BACKUP_RE.test(f) && !f.endsWith('.tmp'); }
+
 // Delete backups older than retentionDays (by file mtime).
 async function prune(config) {
   const days = (config.backup && config.backup.retentionDays) || 30;
@@ -114,7 +152,7 @@ async function prune(config) {
   let files;
   try { files = await readdir(BACKUP_DIR); } catch { return; }
   for (const f of files) {
-    if (!f.endsWith('.bin')) continue;
+    if (!isBackupFile(f)) continue;
     try {
       const s = await stat(join(BACKUP_DIR, f));
       if (s.mtimeMs < cutoff) { await unlink(join(BACKUP_DIR, f)); console.log(`[backup] pruned ${f}`); }
@@ -128,7 +166,7 @@ export async function listBackups() {
   try { files = await readdir(BACKUP_DIR); } catch { return []; }
   const out = [];
   for (const f of files) {
-    if (!f.endsWith('.bin')) continue;
+    if (!isBackupFile(f)) continue;
     try {
       const s = await stat(join(BACKUP_DIR, f));
       out.push({ file: f, bytes: s.size, mtime: s.mtimeMs });
@@ -138,8 +176,8 @@ export async function listBackups() {
 }
 
 export function backupFilePath(file) {
-  // Guard against path traversal — only allow plain .bin filenames.
-  if (!/^[a-zA-Z0-9._-]+\.bin$/.test(file)) return null;
+  // Guard against path traversal — allow only safe chars and require the backup name shape.
+  if (!/^[a-zA-Z0-9._-]+$/.test(file) || !isBackupFile(file)) return null;
   return join(BACKUP_DIR, file);
 }
 

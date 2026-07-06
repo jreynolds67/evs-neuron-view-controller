@@ -71,7 +71,15 @@ async function boardFetch(ip, path, options = {}) {
 
     if (raw) {
       const buf = Buffer.from(await res.arrayBuffer());
-      log({ ip, path, method, url, status: res.status, durationMs, ok: true, detail: `${buf.length} bytes` });
+      const ctype = res.headers.get('content-type') || '';
+      const cdisp = res.headers.get('content-disposition') || '';
+      const head = buf.slice(0, 16).toString('latin1').replace(/[^\x20-\x7e]/g, '.');
+      log({ ip, path, method, url, status: res.status, durationMs, ok: true,
+        detail: `${buf.length} bytes · type=${ctype || 'none'} · disp=${cdisp || 'none'} · head="${head}"` });
+      // Return bytes plus the transport metadata so the caller can name the file correctly
+      // and detect a JSON error masquerading as a download.
+      buf.__ctype = ctype;
+      buf.__cdisp = cdisp;
       return buf;
     }
 
