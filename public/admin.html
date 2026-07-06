@@ -75,6 +75,15 @@
     a.tab.active { color: var(--accent); }
     .admin-clock { font-family: var(--mono, monospace); font-variant-numeric: tabular-nums;
       font-size: 13px; color: var(--ink-dim); margin-right: 20px; white-space: nowrap; }
+    /* Sub-navigation tabs */
+    .subnav { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    .subnav-tab { background: transparent; border: none; border-bottom: 2px solid transparent;
+      color: var(--ink-dim); font-size: 14px; font-weight: 500; padding: 10px 16px; cursor: pointer;
+      margin-bottom: -1px; }
+    .subnav-tab:hover { color: var(--ink); }
+    .subnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tabpanel { display: none; }
+    .tabpanel.active { display: block; }
     /* Per-panel physical layout editor */
     .layout-editor { margin-top: 6px; }
     .lc-grid { display: grid; grid-template-columns: repeat(var(--cols, 7), 1fr); gap: 6px;
@@ -116,108 +125,124 @@
       </div>
     </div>
 
-    <!-- BACKUP -->
-    <div class="section">
-      <h2>Scheduled backup</h2>
-      <div class="desc">Exports a target board's snapshots on a daily schedule, dated and retained for a set number of days. Files download from here — nothing is left on the Neuron.</div>
-      <div class="inline" style="gap:12px; flex-wrap:wrap">
-        <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="bkEnabled" style="width:18px;height:18px"> Enabled</label>
-        <div><label class="muted">Board</label><select id="bkCard" style="min-width:200px"></select></div>
-        <div><label class="muted">Time (24h)</label><input id="bkTime" placeholder="03:00" style="width:90px"></div>
-        <div><label class="muted">Retention (days)</label><input id="bkRetention" type="number" min="1" max="365" style="width:90px"></div>
-        <div style="align-self:flex-end"><button class="btn sm" id="bkSave">Save schedule</button></div>
-        <div style="align-self:flex-end"><button class="btn sm ghost" id="bkRun">Back up now</button></div>
-        <span class="muted" id="bkState"></span>
+    <!-- SUB-NAVIGATION -->
+    <nav class="subnav" id="subnav">
+      <button class="subnav-tab active" data-tab="setup">Setup</button>
+      <button class="subnav-tab" data-tab="snapshots">Snapshots &amp; backup</button>
+      <button class="subnav-tab" data-tab="diagnostics">Settings &amp; diagnostics</button>
+    </nav>
+
+    <!-- ===== TAB: SETUP ===== -->
+    <div class="tabpanel active" data-tabpanel="setup">
+      <!-- CARDS -->
+      <div class="section">
+        <h2>MV cards</h2>
+        <div class="desc">The 12 multiviewer cards. Each has a stable id, a friendly label, and the board's IP address. Board IPs are never sent to the touch panels.</div>
+        <table>
+          <thead><tr><th style="width:120px">ID</th><th>Label</th><th style="width:200px">Board IP</th><th style="width:180px"></th></tr></thead>
+          <tbody id="cardRows"></tbody>
+        </table>
+        <div style="margin-top:12px" class="inline">
+          <button class="btn sm" id="addCard">Add card</button>
+        </div>
       </div>
-      <div style="margin-top:14px"><label class="muted">Available backups</label>
-        <table style="margin-top:6px"><thead><tr><th>File</th><th style="width:120px">Size</th><th style="width:180px">Date</th><th style="width:120px"></th></tr></thead>
-        <tbody id="bkFiles"></tbody></table>
+
+      <!-- PANELS -->
+      <div class="section">
+        <h2>Router panels</h2>
+        <div class="desc">Each Cerebrum panel is identified by its fixed IP. Assign which cards it can control, its screen layout, and optional per-head snapshot filters.</div>
+        <div class="inline" style="margin-bottom:12px; gap:10px">
+          <button class="btn sm ghost" id="refreshAllNames">Refresh head names</button>
+          <span class="muted" id="refreshAllState"></span>
+        </div>
+        <div id="panelList"></div>
+        <div style="margin-top:12px">
+          <button class="btn sm" id="addPanel">Add panel</button>
+        </div>
       </div>
     </div>
 
-    <!-- GLOBAL SETTINGS -->
-    <div class="section">
-      <h2>Global settings</h2>
-      <div class="desc">Apply to every panel.</div>
-      <label class="inline" style="cursor:pointer; gap:10px">
-        <input type="checkbox" id="showUuids" style="width:18px; height:18px">
-        <span>Show UUIDs in the operator view (under card, head, and snapshot names)</span>
-      </label>
+    <!-- ===== TAB: SNAPSHOTS & BACKUP ===== -->
+    <div class="tabpanel" data-tabpanel="snapshots">
+      <!-- GLOBAL HEAD SNAPSHOT FILTERS -->
+      <div class="section">
+        <h2>Head snapshot filters (global)</h2>
+        <div class="desc">Set which snapshots are permitted for each head. These apply to that head on <b>every</b> panel. A panel can override a head with “All snapshots” to show everything regardless of this filter.</div>
+        <div class="inline" style="gap:10px; margin-bottom:10px">
+          <label class="muted">Card</label>
+          <select id="hfCard" style="max-width:280px"><option value="">— select a card —</option></select>
+          <span class="muted" id="hfState"></span>
+        </div>
+        <div id="hfHeads"></div>
+      </div>
+
+      <!-- SHARE SWEEP -->
+      <div class="section">
+        <h2>Auto-share snapshots</h2>
+        <div class="desc">Continuously checks the selected cards and marks any unshared snapshot as shared, so new snapshots propagate across boards automatically.</div>
+        <div class="inline" style="gap:12px; flex-wrap:wrap; margin-bottom:10px">
+          <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="swEnabled" style="width:18px;height:18px"> Enabled</label>
+          <div><label class="muted">Interval (seconds)</label><input id="swInterval" type="number" min="10" max="3600" style="width:100px"></div>
+          <div style="align-self:flex-end"><button class="btn sm" id="swSave">Save</button></div>
+          <div style="align-self:flex-end"><button class="btn sm ghost" id="swRun">Run once now</button></div>
+          <span class="muted" id="sweepState"></span>
+        </div>
+        <label class="muted">Cards to sweep</label>
+        <div class="inline" id="swCards" style="margin-top:6px"></div>
+      </div>
+
+      <!-- BACKUP -->
+      <div class="section">
+        <h2>Scheduled backup</h2>
+        <div class="desc">Exports a target board's snapshots on a daily schedule, dated and retained for a set number of days. Files download from here — nothing is left on the Neuron.</div>
+        <div class="inline" style="gap:12px; flex-wrap:wrap">
+          <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="bkEnabled" style="width:18px;height:18px"> Enabled</label>
+          <div><label class="muted">Board</label><select id="bkCard" style="min-width:200px"></select></div>
+          <div><label class="muted">Time (24h)</label><input id="bkTime" placeholder="03:00" style="width:90px"></div>
+          <div><label class="muted">Retention (days)</label><input id="bkRetention" type="number" min="1" max="365" style="width:90px"></div>
+          <div style="align-self:flex-end"><button class="btn sm" id="bkSave">Save schedule</button></div>
+          <div style="align-self:flex-end"><button class="btn sm ghost" id="bkRun">Back up now</button></div>
+          <span class="muted" id="bkState"></span>
+        </div>
+        <div style="margin-top:14px"><label class="muted">Available backups</label>
+          <table style="margin-top:6px"><thead><tr><th>File</th><th style="width:120px">Size</th><th style="width:180px">Date</th><th style="width:120px"></th></tr></thead>
+          <tbody id="bkFiles"></tbody></table>
+        </div>
+      </div>
     </div>
 
-    <!-- CARDS -->
-    <div class="section">
-      <h2>MV cards</h2>
-      <div class="desc">The 12 multiviewer cards. Each has a stable id, a friendly label, and the board's IP address. Board IPs are never sent to the touch panels.</div>
-      <table>
-        <thead><tr><th style="width:120px">ID</th><th>Label</th><th style="width:200px">Board IP</th><th style="width:180px"></th></tr></thead>
-        <tbody id="cardRows"></tbody>
-      </table>
-      <div style="margin-top:12px" class="inline">
-        <button class="btn sm" id="addCard">Add card</button>
+    <!-- ===== TAB: SETTINGS & DIAGNOSTICS ===== -->
+    <div class="tabpanel" data-tabpanel="diagnostics">
+      <!-- GLOBAL SETTINGS -->
+      <div class="section">
+        <h2>Global settings</h2>
+        <div class="desc">Apply to every panel.</div>
+        <label class="inline" style="cursor:pointer; gap:10px">
+          <input type="checkbox" id="showUuids" style="width:18px; height:18px">
+          <span>Show UUIDs in the operator view (under card, head, and snapshot names)</span>
+        </label>
       </div>
-    </div>
 
-    <!-- GLOBAL HEAD SNAPSHOT FILTERS -->
-    <div class="section">
-      <h2>Head snapshot filters (global)</h2>
-      <div class="desc">Set which snapshots are permitted for each head. These apply to that head on <b>every</b> panel. A panel can override a head with “All snapshots” to show everything regardless of this filter.</div>
-      <div class="inline" style="gap:10px; margin-bottom:10px">
-        <label class="muted">Card</label>
-        <select id="hfCard" style="max-width:280px"><option value="">— select a card —</option></select>
-        <span class="muted" id="hfState"></span>
+      <!-- API LOG -->
+      <div class="section">
+        <h2>Board API activity</h2>
+        <div class="desc">Live log of every request this server makes to the multiviewer boards, including connection failures with their underlying cause. Use "Test reach" on a card to probe it without changing anything.</div>
+        <div class="inline" style="margin-bottom:10px">
+          <label class="chip"><input type="checkbox" id="logAuto" checked style="width:auto"> Auto-refresh</label>
+          <button class="btn sm ghost" id="logRefresh">Refresh now</button>
+          <button class="btn sm ghost" id="logClear">Clear log</button>
+          <span class="muted" id="logState"></span>
+        </div>
+        <div id="reachRow" class="inline" style="margin-bottom:10px"></div>
+        <table>
+          <thead><tr>
+            <th style="width:96px">Time</th><th style="width:60px">Method</th>
+            <th>Target</th><th style="width:70px">Status</th>
+            <th style="width:64px">ms</th><th>Detail</th>
+          </tr></thead>
+          <tbody id="logRows"></tbody>
+        </table>
       </div>
-      <div id="hfHeads"></div>
-    </div>
-
-    <!-- PANELS -->
-    <div class="section">
-      <h2>Router panels</h2>
-      <div class="desc">Each Cerebrum panel is identified by its fixed IP. Assign which cards it can control, its screen layout, and optional per-head snapshot filters.</div>
-      <div class="inline" style="margin-bottom:12px; gap:10px">
-        <button class="btn sm ghost" id="refreshAllNames">Refresh head names</button>
-        <span class="muted" id="refreshAllState"></span>
-      </div>
-      <div id="panelList"></div>
-      <div style="margin-top:12px">
-        <button class="btn sm" id="addPanel">Add panel</button>
-      </div>
-    </div>
-
-    <!-- SHARE SWEEP -->
-    <div class="section">
-      <h2>Auto-share snapshots</h2>
-      <div class="desc">Continuously checks the selected cards and marks any unshared snapshot as shared, so new snapshots propagate across boards automatically.</div>
-      <div class="inline" style="gap:12px; flex-wrap:wrap; margin-bottom:10px">
-        <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="swEnabled" style="width:18px;height:18px"> Enabled</label>
-        <div><label class="muted">Interval (seconds)</label><input id="swInterval" type="number" min="10" max="3600" style="width:100px"></div>
-        <div style="align-self:flex-end"><button class="btn sm" id="swSave">Save</button></div>
-        <div style="align-self:flex-end"><button class="btn sm ghost" id="swRun">Run once now</button></div>
-        <span class="muted" id="sweepState"></span>
-      </div>
-      <label class="muted">Cards to sweep</label>
-      <div class="inline" id="swCards" style="margin-top:6px"></div>
-    </div>
-
-    <!-- API LOG -->
-    <div class="section">
-      <h2>Board API activity</h2>
-      <div class="desc">Live log of every request this server makes to the multiviewer boards, including connection failures with their underlying cause. Use "Test reach" on a card to probe it without changing anything.</div>
-      <div class="inline" style="margin-bottom:10px">
-        <label class="chip"><input type="checkbox" id="logAuto" checked style="width:auto"> Auto-refresh</label>
-        <button class="btn sm ghost" id="logRefresh">Refresh now</button>
-        <button class="btn sm ghost" id="logClear">Clear log</button>
-        <span class="muted" id="logState"></span>
-      </div>
-      <div id="reachRow" class="inline" style="margin-bottom:10px"></div>
-      <table>
-        <thead><tr>
-          <th style="width:96px">Time</th><th style="width:60px">Method</th>
-          <th>Target</th><th style="width:70px">Status</th>
-          <th style="width:64px">ms</th><th>Detail</th>
-        </tr></thead>
-        <tbody id="logRows"></tbody>
-      </table>
     </div>
   </div>
 

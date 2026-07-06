@@ -118,7 +118,7 @@ function renderPanels() {
         <div style="width:200px"><label class="muted">Layout</label>
           <select data-pi="${pi}" data-f="layout">
             <option value="1080"${p.layout === '1080' ? ' selected' : ''}>1920 × 1080</option>
-            <option value="strip"${p.layout === 'strip' ? ' selected' : ''}>1835 × 291 (strip)</option>
+            <option value="strip"${p.layout === 'strip' ? ' selected' : ''}>1835 × 291 (CTP)</option>
           </select></div>
         <div style="align-self:flex-end"><button class="btn sm del" data-delpanel="${pi}">Remove</button></div>
       </div>
@@ -883,6 +883,19 @@ $('bkRun').addEventListener('click', async () => {
 loadConfig();
 refreshLog(true);
 startLogAuto();
+
+// Sub-navigation: switch between admin tab panels. Purely a display grouping — all
+// sections stay in the DOM (so their render/refresh logic is unaffected), we just show
+// one panel at a time.
+document.querySelectorAll('.subnav-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab;
+    document.querySelectorAll('.subnav-tab').forEach((t) => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.tabpanel').forEach((p) => {
+      p.classList.toggle('active', p.dataset.tabpanel === target);
+    });
+  });
+});
 
 // Container clock in the admin header. Renders the container's wall-clock time in the
 // container's own timezone (from /api/time), so it's accurate even if the browser is in a
