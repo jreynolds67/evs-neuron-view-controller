@@ -188,11 +188,15 @@ async function renderHeads() {
   const useGrid = g && g.rows > 0 && g.cols > 0;
   if (useGrid) {
     grid.classList.add('head-grid-custom');
-    // Cap column width; rows size themselves from the tiles' 16:9 aspect ratio (set in
-    // CSS) rather than a fixed height, so previews aren't cropped. Leftover space is left
-    // empty (grid is start-aligned in CSS).
-    grid.style.gridTemplateColumns = `repeat(${g.cols}, minmax(0, 240px))`;
-    grid.style.gridTemplateRows = `repeat(${g.rows}, auto)`;
+    // Fixed cell size so the grid is RIGID: empty rows/columns reserve the same space as
+    // populated ones, keeping each head in its true physical position. Row height = the
+    // 16:9 preview at the column width + the name footer, so nothing is cropped and gaps
+    // between rows are consistent whether or not a cell is filled.
+    const colW = 310;
+    const footer = 44;                       // name bar height
+    const rowH = Math.round(colW * 9 / 16) + footer;
+    grid.style.gridTemplateColumns = `repeat(${g.cols}, ${colW}px)`;
+    grid.style.gridTemplateRows = `repeat(${g.rows}, ${rowH}px)`;
   } else {
     grid.classList.remove('head-grid-custom');
     grid.style.gridTemplateColumns = '';

@@ -79,8 +79,16 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 /* When a panel defines an explicit grid, columns are width-capped (set inline) and the
    grid is aligned top-left; extra space is left empty rather than stretching tiles. Cards
    size to their content and keep a 16:9 preview so nothing is cropped. */
+/* Explicit grid = RIGID: cells are a fixed size (set inline) so empty rows/columns hold
+   the same space as populated ones, preserving each head's physical position. Cards fill
+   their cell; the preview takes the space above a fixed-height name footer. */
 .grid.head-grid-custom { height: 100%; justify-content: start; align-content: start; }
-.grid.head-grid-custom .card { min-height: 0; height: auto; align-self: start; }
+.grid.head-grid-custom .card {
+  min-height: 0; height: 100%; align-self: stretch;
+  display: flex; flex-direction: column;
+}
+.grid.head-grid-custom .card-preview { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
+.grid.head-grid-custom .card-body { flex: 0 0 auto; }
 .card {
   min-height: var(--touch);
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
