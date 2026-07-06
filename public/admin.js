@@ -139,7 +139,16 @@ function renderPanels() {
     host.appendChild(box);
 
     box.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('input', (e) => {
-      config.panels[pi][e.target.dataset.f] = e.target.value;
+      const field = e.target.dataset.f;
+      const prev = config.panels[pi][field];
+      config.panels[pi][field] = e.target.value;
+      // Changing the layout type changes the fixed column count (7 ↔ 8). The old grid was
+      // laid out for the previous width, so its rows no longer line up — clear it so the
+      // arrangement is rebuilt for the new shape, and re-render the editor.
+      if (field === 'layout' && e.target.value !== prev) {
+        config.panels[pi].layoutGrid = [];
+        renderLayoutEditor(pi);
+      }
     }));
     box.querySelector('[data-delpanel]').addEventListener('click', () => {
       config.panels.splice(pi, 1); renderPanels();
@@ -249,8 +258,7 @@ function renderLayoutEditor(pi) {
   controls.innerHTML = `
     <span class="muted">${cols} columns (fixed) × ${rows} row${rows === 1 ? '' : 's'}</span>
     <button class="btn sm ghost" data-lc-addrow>+ Row</button>
-    <button class="btn sm ghost" data-lc-delrow ${rows <= 1 ? 'disabled' : ''}>− Row</button>
-    <button class="btn sm ghost" data-lc-addblank>+ Blank cell</button>`;
+    <button class="btn sm ghost" data-lc-delrow ${rows <= 1 ? 'disabled' : ''}>− Row</button>`;
   host.appendChild(controls);
 
   controls.querySelector('[data-lc-addrow]').addEventListener('click', () => {
@@ -262,11 +270,6 @@ function renderLayoutEditor(pi) {
     // Remove the last row; any heads in it return to the tray automatically (they're just
     // dropped from the grid, still assigned to the panel).
     p.layoutGrid.splice(p.layoutGrid.length - cols, cols);
-    renderLayoutEditor(pi);
-  });
-  controls.querySelector('[data-lc-addblank]').addEventListener('click', () => {
-    p.layoutGrid.push({ type: 'blank' });
-    ensureGrid(p);
     renderLayoutEditor(pi);
   });
 
