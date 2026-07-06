@@ -76,11 +76,11 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
-/* When a panel defines an explicit grid, cells are size-capped (set inline) and the grid
-   is aligned to the top-left; any extra space is left empty on the right/bottom rather
-   than stretching the tiles. */
+/* When a panel defines an explicit grid, columns are width-capped (set inline) and the
+   grid is aligned top-left; extra space is left empty rather than stretching tiles. Cards
+   size to their content and keep a 16:9 preview so nothing is cropped. */
 .grid.head-grid-custom { height: 100%; justify-content: start; align-content: start; }
-.grid.head-grid-custom .card { min-height: 0; }
+.grid.head-grid-custom .card { min-height: 0; height: auto; align-self: start; }
 .card {
   min-height: var(--touch);
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
