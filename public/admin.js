@@ -6,19 +6,20 @@ const $ = (id) => document.getElementById(id);
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 const byName = (a, b) => collator.compare(a.name || '', b.name || '');
 
-function token() { return $('token').value.trim(); }
+// Admin token was removed from the UI. These stubs keep the request helpers working
+// (no token is ever sent — the server treats a missing token as "open").
+function token() { return ''; }
 function headers() {
-  const h = { 'Content-Type': 'application/json' };
-  if (token()) h['x-admin-token'] = token();
-  return h;
+  return { 'Content-Type': 'application/json' };
 }
+function setLoadState(msg) { const el = $('loadState'); if (el) el.textContent = msg; }
 function toast(msg, kind = '') {
   const t = $('toast'); t.textContent = msg; t.className = `toast show ${kind}`;
   clearTimeout(toast._t); toast._t = setTimeout(() => t.className = 'toast', 3000);
 }
 
 async function loadConfig() {
-  $('loadState').textContent = 'Loading…';
+  setLoadState('Loading…');
   try {
     const res = await fetch('/api/admin/config', { headers: headers() });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
@@ -28,10 +29,10 @@ async function loadConfig() {
     config.settings ||= { showUuids: true };
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();
-    $('loadState').textContent = 'Loaded';
+    setLoadState('Loaded');
     if (typeof refreshBackup === 'function') refreshBackup();
     if (typeof refreshSweep === 'function') refreshSweep();
-  } catch (e) { $('loadState').textContent = 'Error: ' + e.message; }
+  } catch (e) { setLoadState('Error: ' + e.message); }
 }
 
 async function saveConfig() {
@@ -604,7 +605,8 @@ async function renderGlobalHeadFilters(cardId) {
   }
 }
 
-$('reload').addEventListener('click', loadConfig);
+const reloadBtn = $('reload');
+if (reloadBtn) reloadBtn.addEventListener('click', loadConfig);
 $('save').addEventListener('click', saveConfig);
 
 // ---- Export / import backup ----------------------------------------------

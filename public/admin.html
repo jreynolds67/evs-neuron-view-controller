@@ -115,42 +115,19 @@
   </div>
 
   <div class="wrap">
-    <div class="section">
-      <h2>Admin token</h2>
-      <div class="desc">If the server has ADMIN_TOKEN set, enter it here to load and save. Leave blank if disabled.</div>
-      <div class="inline">
-        <input id="token" type="password" placeholder="Admin token (optional)" style="max-width:340px">
-        <button class="btn sm" id="reload">Load config</button>
-        <span class="muted" id="loadState"></span>
-      </div>
-    </div>
-
     <!-- SUB-NAVIGATION -->
     <nav class="subnav" id="subnav">
-      <button class="subnav-tab active" data-tab="setup">Setup</button>
-      <button class="subnav-tab" data-tab="snapshots">Snapshots &amp; backup</button>
-      <button class="subnav-tab" data-tab="diagnostics">Settings &amp; diagnostics</button>
+      <button class="subnav-tab active" data-tab="panels">Panels</button>
+      <button class="subnav-tab" data-tab="heads">Heads</button>
+      <button class="subnav-tab" data-tab="backups">Backups &amp; sharing</button>
+      <button class="subnav-tab" data-tab="setup">Setup</button>
     </nav>
 
-    <!-- ===== TAB: SETUP ===== -->
-    <div class="tabpanel active" data-tabpanel="setup">
-      <!-- CARDS -->
-      <div class="section">
-        <h2>MV cards</h2>
-        <div class="desc">The 12 multiviewer cards. Each has a stable id, a friendly label, and the board's IP address. Board IPs are never sent to the touch panels.</div>
-        <table>
-          <thead><tr><th style="width:120px">ID</th><th>Label</th><th style="width:200px">Board IP</th><th style="width:180px"></th></tr></thead>
-          <tbody id="cardRows"></tbody>
-        </table>
-        <div style="margin-top:12px" class="inline">
-          <button class="btn sm" id="addCard">Add card</button>
-        </div>
-      </div>
-
-      <!-- PANELS -->
+    <!-- ===== TAB: PANELS ===== -->
+    <div class="tabpanel active" data-tabpanel="panels">
       <div class="section">
         <h2>Router panels</h2>
-        <div class="desc">Each Cerebrum panel is identified by its fixed IP. Assign which cards it can control, its screen layout, and optional per-head snapshot filters.</div>
+        <div class="desc">Each Cerebrum panel is identified by its fixed IP. Assign which heads it controls, its screen layout, and arrange them to match the physical monitor wall.</div>
         <div class="inline" style="margin-bottom:12px; gap:10px">
           <button class="btn sm ghost" id="refreshAllNames">Refresh head names</button>
           <span class="muted" id="refreshAllState"></span>
@@ -162,9 +139,8 @@
       </div>
     </div>
 
-    <!-- ===== TAB: SNAPSHOTS & BACKUP ===== -->
-    <div class="tabpanel" data-tabpanel="snapshots">
-      <!-- GLOBAL HEAD SNAPSHOT FILTERS -->
+    <!-- ===== TAB: HEADS ===== -->
+    <div class="tabpanel" data-tabpanel="heads">
       <div class="section">
         <h2>Head snapshot filters (global)</h2>
         <div class="desc">Set which snapshots are permitted for each head. These apply to that head on <b>every</b> panel. A panel can override a head with “All snapshots” to show everything regardless of this filter.</div>
@@ -175,7 +151,10 @@
         </div>
         <div id="hfHeads"></div>
       </div>
+    </div>
 
+    <!-- ===== TAB: BACKUPS & SHARING ===== -->
+    <div class="tabpanel" data-tabpanel="backups">
       <!-- SHARE SWEEP -->
       <div class="section">
         <h2>Auto-share snapshots</h2>
@@ -211,8 +190,8 @@
       </div>
     </div>
 
-    <!-- ===== TAB: SETTINGS & DIAGNOSTICS ===== -->
-    <div class="tabpanel" data-tabpanel="diagnostics">
+    <!-- ===== TAB: SETUP ===== -->
+    <div class="tabpanel" data-tabpanel="setup">
       <!-- GLOBAL SETTINGS -->
       <div class="section">
         <h2>Global settings</h2>
@@ -223,9 +202,22 @@
         </label>
       </div>
 
+      <!-- CARDS -->
+      <div class="section">
+        <h2>MV cards</h2>
+        <div class="desc">The 12 multiviewer cards. Each has a stable id, a friendly label, and the board's IP address. Board IPs are never sent to the touch panels.</div>
+        <table>
+          <thead><tr><th style="width:120px">ID</th><th>Label</th><th style="width:200px">Board IP</th><th style="width:180px"></th></tr></thead>
+          <tbody id="cardRows"></tbody>
+        </table>
+        <div style="margin-top:12px" class="inline">
+          <button class="btn sm" id="addCard">Add card</button>
+        </div>
+      </div>
+
       <!-- API LOG -->
       <div class="section">
-        <h2>Board API activity</h2>
+        <h2>Board API activity (diagnostics)</h2>
         <div class="desc">Live log of every request this server makes to the multiviewer boards, including connection failures with their underlying cause. Use "Test reach" on a card to probe it without changing anything.</div>
         <div class="inline" style="margin-bottom:10px">
           <label class="chip"><input type="checkbox" id="logAuto" checked style="width:auto"> Auto-refresh</label>
@@ -247,6 +239,7 @@
   </div>
 
   <div class="savebar">
+    <span class="muted" id="loadState"></span>
     <span class="muted" id="saveState">Not saved yet</span>
     <div class="grow"></div>
     <button class="btn sm ghost" id="exportBtn">Export backup</button>
