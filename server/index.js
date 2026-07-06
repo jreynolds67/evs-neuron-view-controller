@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 
 import {
   loadConfig, saveConfig, getCardById, getPanelByIp,
@@ -462,6 +463,26 @@ app.get('/api/admin/backup/download/:file', requireAdmin, async (req, res) => {
   const path = backupFilePath(req.params.file);
   if (!path || !existsSync(path)) return res.status(404).json({ error: 'Not found' });
   res.download(path, req.params.file);
+});
+
+// Delete a single backup file.
+app.delete('/api/admin/backup/files/:file', requireAdmin, async (req, res) => {
+  const path = backupFilePath(req.params.file);
+  if (!path || !existsSync(path)) return res.status(404).json({ error: 'Not found' });
+  try { await unlink(path); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a single backup file. Same filename validation guards against traversal.
+app.delete('/api/admin/backup/files/:file', requireAdmin, async (req, res) => {
+  const path = backupFilePath(req.params.file);
+  if (!path || !existsSync(path)) return res.status(404).json({ error: 'Not found' });
+  try {
+    await unlink(path);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Reachability probe: try a lightweight GET against a card's board and report the

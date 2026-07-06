@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getSnapshotInfo, normalizeSnapshotEntry, exportSnapshots } from './board.js';
 import { loadConfig, getCardById } from './config.js';
+import { buildZip } from './zip.js';
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/data/backups';
 
@@ -89,10 +90,12 @@ export async function runBackupNow() {
     // Attempt 1: whole board as a single file, by explicit UUID list (no wildcard —
     // the board rejects sending both).
     let ok = false;
+    let vmisExt = '.vmis';
     try {
       const buf = await exportSnapshots(ip, { snapshots: allUuids });
       if (buf && buf.length && !looksLikeJson(buf)) {
-        const file = `${date}__${label}__all${extFromDisposition(buf)}`;
+        vmisExt = extFromDisposition(buf) || '.vmis';
+        const file = `${date}__${label}__all${vmisExt}`;
         await writeAtomic(join(BACKUP_DIR, file), buf);
         written.push({ file, bytes: buf.length });
         ok = true;
@@ -102,6 +105,39 @@ export async function runBackupNow() {
       }
     } catch (e) {
       // fall through to per-folder
+    }
+
+    // Also build a ZIP of INDIVIDUAL snapshot files, so specific ones can be re-imported
+    // without restoring the whole board. Each snapshot is exported on its own and added to
+    // the archive named by its snapshot name (deduplicated) with the board's extension.
+    if (ok) {
+      try {
+        const zipEntries = [];
+        const usedNames = new Set();
+        for (const e of entries) {
+          let buf;
+          try { buf = await exportSnapshots(ip, { snapshots: [e.uuid] }); }
+          catch { continue; }
+          if (!buf || !buf.length || looksLikeJson(buf)) continue;
+          const ext = extFromDisposition(buf) || vmisExt;
+          // Build a unique, filesystem-safe name inside the zip: "<folder> - <name>".
+          const base = safe(`${e.path ? e.path + ' - ' : ''}${e.name || e.uuid}`);
+          let name = `${base}${ext}`;
+          let n = 2;
+          while (usedNames.has(name)) { name = `${base} (${n++})${ext}`; }
+          usedNames.add(name);
+          zipEntries.push({ name, data: buf });
+        }
+        if (zipEntries.length) {
+          const zipBuf = buildZip(zipEntries);
+          const zipFile = `${date}__${label}__individual.zip`;
+          await writeAtomic(join(BACKUP_DIR, zipFile), zipBuf);
+          written.push({ file: zipFile, bytes: zipBuf.length });
+          console.log(`[backup] bundled ${zipEntries.length} individual snapshot(s) into ${zipFile}`);
+        }
+      } catch (e) {
+        console.log(`[backup] individual-zip step failed: ${e.message}`);
+      }
     }
 
     // Attempt 2 (fallback): per-folder exports, each by that folder's explicit UUID list.

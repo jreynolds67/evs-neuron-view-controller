@@ -592,15 +592,30 @@ function renderBackupFiles(files) {
     tr.innerHTML = `<td class="mono" style="font-size:12px">${f.file}</td>
       <td>${fmtBytes(f.bytes)}</td>
       <td>${new Date(f.mtime).toLocaleString()}</td>
-      <td><a class="btn sm ghost" href="/api/admin/backup/download/${encodeURIComponent(f.file)}${token() ? '' : ''}" download>Download</a></td>`;
+      <td class="inline" style="gap:6px">
+        <a class="btn sm ghost bk-dl" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download>Download</a>
+        <button class="btn sm del bk-del">Delete</button>
+      </td>`;
     // If a token is set, downloads need the header — use a JS handler instead of a bare link.
     if (token()) {
-      const a = tr.querySelector('a');
+      const a = tr.querySelector('.bk-dl');
       a.removeAttribute('href');
       a.addEventListener('click', () => downloadWithToken(f.file));
     }
+    tr.querySelector('.bk-del').addEventListener('click', () => deleteBackup(f.file));
     tb.appendChild(tr);
   });
+}
+
+async function deleteBackup(file) {
+  if (!confirm(`Delete backup "${file}"? This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`/api/admin/backup/files/${encodeURIComponent(file)}`, { method: 'DELETE', headers: headers() });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    const files = await fetch('/api/admin/backup/files', { headers: headers() }).then(r => r.json());
+    renderBackupFiles(files.files || []);
+    $('bkState').textContent = `Deleted ${file}`;
+  } catch (e) { $('bkState').textContent = 'Delete failed: ' + e.message; }
 }
 
 async function downloadWithToken(file) {
@@ -654,3 +669,24 @@ $('bkRun').addEventListener('click', async () => {
 loadConfig();
 refreshLog(true);
 startLogAuto();
+
+// Container clock in the admin header — lets you confirm the container's timezone.
+let clockOffsetMs = 0, clockTz = '';
+async function syncClock() {
+  try {
+    const t = await fetch('/api/time').then((r) => r.json());
+    clockOffsetMs = t.epochMs - Date.now();
+    clockTz = t.tz || '';
+  } catch {}
+}
+function tickClock() {
+  const el = document.getElementById('adminClock');
+  if (!el) return;
+  const d = new Date(Date.now() + clockOffsetMs);
+  const p = (n) => String(n).padStart(2, '0');
+  el.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}` + (clockTz ? ` · ${clockTz}` : '');
+}
+tickClock();
+setInterval(tickClock, 1000);
+syncClock().then(tickClock);
+setInterval(syncClock, 5 * 60 * 1000);

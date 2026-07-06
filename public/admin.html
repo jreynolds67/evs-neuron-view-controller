@@ -73,12 +73,15 @@
     .assigned-head .btn.sm { min-height: 34px; padding: 0 12px; }
     a.tab { color: var(--ink-dim); text-decoration: none; margin-right: 16px; }
     a.tab.active { color: var(--accent); }
+    .admin-clock { font-family: var(--mono, monospace); font-variant-numeric: tabular-nums;
+      font-size: 13px; color: var(--ink-dim); margin-right: 20px; white-space: nowrap; }
   </style>
 </head>
 <body>
   <div class="topbar">
     <div class="title">Neuron MV Control — Admin</div>
     <div class="spacer"></div>
+    <div class="admin-clock" id="adminClock" title="Container time">--:--:--</div>
     <a class="tab active" href="admin.html">Admin</a>
     <a class="tab" href="index.html">Panel view</a>
   </div>
