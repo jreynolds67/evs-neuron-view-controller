@@ -131,6 +131,10 @@ function renderPanels() {
           <span class="muted" id="addHeadState-${pi}"></span>
         </div>
         <div id="headPicker-${pi}"></div>
+      </div>
+      <div style="margin-top:18px">
+        <label class="muted">Physical layout — drag heads into the grid to match the monitor wall</label>
+        <div id="layoutEditor-${pi}" class="layout-editor"></div>
       </div>`;
     host.appendChild(box);
 
@@ -144,6 +148,7 @@ function renderPanels() {
     box.querySelector(`[data-addallheads="${pi}"]`).addEventListener('click', () => addAllHeads(pi));
 
     renderHeadList(pi);
+    renderLayoutEditor(pi);
   });
 }
 
@@ -188,10 +193,177 @@ function renderHeadList(pi) {
       [p.heads[i + 1], p.heads[i]] = [p.heads[i], p.heads[i + 1]]; renderHeadList(pi);
     });
     row.querySelector('.ah-del').addEventListener('click', () => {
-      p.heads.splice(i, 1); renderHeadList(pi);
+      p.heads.splice(i, 1); renderHeadList(pi); renderLayoutEditor(pi);
     });
     host.appendChild(row);
   });
+}
+
+// ---- Per-panel physical layout editor ------------------------------------
+// Columns are FIXED (7 for 1080, 8 for strip) to preserve the operator-view scaling.
+// The admin defines the number of ROWS and drags heads into a row-major grid. Each slot
+// is a head ref or a blank spacer. Stored as panel.layoutGrid = [ slot, ... ] row-major.
+
+function layoutCols(panel) { return panel.layout === 'strip' ? 8 : 7; }
+
+// Ensure the grid array exists and is sized to a whole number of rows.
+function ensureGrid(p) {
+  const cols = layoutCols(p);
+  if (!Array.isArray(p.layoutGrid)) p.layoutGrid = [];
+  // pad to a full row
+  while (p.layoutGrid.length % cols !== 0) p.layoutGrid.push({ type: 'blank' });
+  if (!p.layoutGrid.length) for (let i = 0; i < cols; i++) p.layoutGrid.push({ type: 'blank' });
+  return cols;
+}
+
+// Heads assigned to the panel that are NOT yet placed anywhere in the grid.
+function unplacedHeads(p) {
+  const placed = new Set(
+    (p.layoutGrid || []).filter((s) => s && s.type === 'head').map((s) => `${s.cardId}::${s.headUuid}`));
+  return (p.heads || []).filter((h) => !placed.has(`${h.cardId}::${h.headUuid}`));
+}
+
+function renderLayoutEditor(pi) {
+  const p = config.panels[pi];
+  const host = $(`layoutEditor-${pi}`);
+  if (!host) return;
+  host.innerHTML = '';
+
+  if (!p.heads || !p.heads.length) {
+    host.innerHTML = '<div class="muted">Add heads above first, then arrange them here.</div>';
+    return;
+  }
+
+  const cols = ensureGrid(p);
+  // Prune grid slots whose head is no longer assigned to the panel (turn them into blanks).
+  const assigned = new Set(p.heads.map((h) => `${h.cardId}::${h.headUuid}`));
+  p.layoutGrid = p.layoutGrid.map((s) =>
+    (s && s.type === 'head' && !assigned.has(`${s.cardId}::${s.headUuid}`)) ? { type: 'blank' } : s);
+
+  const rows = p.layoutGrid.length / cols;
+
+  // Controls: row add/remove + a note.
+  const controls = document.createElement('div');
+  controls.className = 'inline';
+  controls.style.marginBottom = '8px';
+  controls.innerHTML = `
+    <span class="muted">${cols} columns (fixed) × ${rows} row${rows === 1 ? '' : 's'}</span>
+    <button class="btn sm ghost" data-lc-addrow>+ Row</button>
+    <button class="btn sm ghost" data-lc-delrow ${rows <= 1 ? 'disabled' : ''}>− Row</button>
+    <button class="btn sm ghost" data-lc-addblank>+ Blank cell</button>`;
+  host.appendChild(controls);
+
+  controls.querySelector('[data-lc-addrow]').addEventListener('click', () => {
+    for (let i = 0; i < cols; i++) p.layoutGrid.push({ type: 'blank' });
+    renderLayoutEditor(pi);
+  });
+  controls.querySelector('[data-lc-delrow]').addEventListener('click', () => {
+    if (p.layoutGrid.length <= cols) return;
+    // Remove the last row; any heads in it return to the tray automatically (they're just
+    // dropped from the grid, still assigned to the panel).
+    p.layoutGrid.splice(p.layoutGrid.length - cols, cols);
+    renderLayoutEditor(pi);
+  });
+  controls.querySelector('[data-lc-addblank]').addEventListener('click', () => {
+    p.layoutGrid.push({ type: 'blank' });
+    ensureGrid(p);
+    renderLayoutEditor(pi);
+  });
+
+  // The grid itself.
+  const gridEl = document.createElement('div');
+  gridEl.className = 'lc-grid' + (p.layout === 'strip' ? ' strip' : '');
+  gridEl.style.setProperty('--cols', String(cols));
+
+  p.layoutGrid.forEach((slot, idx) => {
+    const cell = document.createElement('div');
+    cell.className = 'lc-cell';
+    cell.dataset.idx = String(idx);
+
+    if (slot && slot.type === 'head') {
+      const h = p.heads.find((x) => x.cardId === slot.cardId && x.headUuid === slot.headUuid);
+      cell.classList.add('filled');
+      cell.draggable = true;
+      cell.textContent = (h && (h.label || h.boardName)) || 'Head';
+      cell.title = 'Drag to move · double-click to clear';
+      cell.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', JSON.stringify({ from: 'grid', idx }));
+      });
+      cell.addEventListener('dblclick', () => { p.layoutGrid[idx] = { type: 'blank' }; renderLayoutEditor(pi); });
+    } else {
+      cell.classList.add('blank');
+      cell.textContent = '';
+      cell.title = 'Blank spacer · drop a head here';
+    }
+
+    // Drop target behavior for every cell.
+    cell.addEventListener('dragover', (e) => { e.preventDefault(); cell.classList.add('over'); });
+    cell.addEventListener('dragleave', () => cell.classList.remove('over'));
+    cell.addEventListener('drop', (e) => {
+      e.preventDefault(); cell.classList.remove('over');
+      let payload;
+      try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+      placeIntoCell(pi, idx, payload);
+    });
+
+    gridEl.appendChild(cell);
+  });
+  host.appendChild(gridEl);
+
+  // Tray of unplaced heads.
+  const unplaced = unplacedHeads(p);
+  const tray = document.createElement('div');
+  tray.className = 'lc-tray';
+  tray.innerHTML = `<div class="muted" style="margin-bottom:6px">Unplaced heads (${unplaced.length}) — drag into the grid</div>`;
+  const chips = document.createElement('div');
+  chips.className = 'lc-chips';
+  if (!unplaced.length) {
+    chips.innerHTML = '<span class="muted">All assigned heads are placed.</span>';
+  } else {
+    unplaced.forEach((h) => {
+      const chip = document.createElement('div');
+      chip.className = 'lc-chip';
+      chip.draggable = true;
+      chip.textContent = h.label || h.boardName || h.headUuid;
+      chip.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+          from: 'tray', cardId: h.cardId, headUuid: h.headUuid,
+        }));
+      });
+      chips.appendChild(chip);
+    });
+  }
+  tray.appendChild(chips);
+
+  // Dropping a head back onto the tray unplaces it.
+  tray.addEventListener('dragover', (e) => { e.preventDefault(); tray.classList.add('over'); });
+  tray.addEventListener('dragleave', () => tray.classList.remove('over'));
+  tray.addEventListener('drop', (e) => {
+    e.preventDefault(); tray.classList.remove('over');
+    let payload;
+    try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+    if (payload.from === 'grid') { p.layoutGrid[payload.idx] = { type: 'blank' }; renderLayoutEditor(pi); }
+  });
+  host.appendChild(tray);
+}
+
+// Place a dragged item (from tray or grid) into a target cell index.
+function placeIntoCell(pi, targetIdx, payload) {
+  const p = config.panels[pi];
+  const target = p.layoutGrid[targetIdx];
+
+  if (payload.from === 'tray') {
+    // Placing an unplaced head. If target holds a head, that head goes back to the tray.
+    p.layoutGrid[targetIdx] = { type: 'head', cardId: payload.cardId, headUuid: payload.headUuid };
+  } else if (payload.from === 'grid') {
+    const srcIdx = payload.idx;
+    if (srcIdx === targetIdx) return;
+    // Swap source and target (moving a head onto a blank leaves a blank behind; onto a
+    // head swaps the two).
+    p.layoutGrid[targetIdx] = p.layoutGrid[srcIdx];
+    p.layoutGrid[srcIdx] = target && target.type === 'head' ? target : { type: 'blank' };
+  }
+  renderLayoutEditor(pi);
 }
 
 // Head picker: choose a card, then one of its heads to assign to the panel.
@@ -249,6 +421,7 @@ async function openHeadPicker(pi) {
     host.innerHTML = '';
     stateEl.textContent = '';
     renderHeadList(pi);
+    renderLayoutEditor(pi);
   });
 
   picker.querySelector('.hp-cancel').addEventListener('click', () => { host.innerHTML = ''; });
@@ -283,6 +456,7 @@ async function addAllHeads(pi) {
   }
 
   renderHeadList(pi);
+  renderLayoutEditor(pi);
   stateEl.textContent = `Added ${added} head${added === 1 ? '' : 's'}`
     + (skipped ? `, skipped ${skipped} unnamed` : '')
     + (failed.length ? `, ${failed.length} card(s) unreachable` : '')

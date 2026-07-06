@@ -127,17 +127,30 @@ app.get('/api/panel/me', async (req, res) => {
   if (!panel) {
     return res.status(404).json({ error: 'Panel not registered', ip });
   }
-  const heads = (panel.heads || [])
-    .filter((h) => getCardById(config, h.cardId)) // drop heads whose card was removed
-    .slice()
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .map((h) => ({
-      cardId: h.cardId,
-      headUuid: h.headUuid,
+  const cols = (panel.layout === 'strip') ? 8 : 7;
+
+  // The operator view is driven ENTIRELY by the layout grid (row-major slots). Each slot
+  // is either a head (resolved to the data the client needs) or a blank spacer. Heads
+  // whose card was removed, or that don't resolve, become blanks so the grid keeps shape.
+  const grid = (panel.layoutGrid || []).map((slot) => {
+    if (!slot || slot.type !== 'head') return { type: 'blank' };
+    if (!getCardById(config, slot.cardId)) return { type: 'blank' };
+    // Resolve against the panel's head assignments. A grid reference with no matching
+    // assignment (head was unassigned) becomes a blank so the grid keeps its shape.
+    const h = (panel.heads || []).find(
+      (x) => x.cardId === slot.cardId && x.headUuid === slot.headUuid);
+    if (!h) return { type: 'blank' };
+    return {
+      type: 'head',
+      cardId: slot.cardId,
+      headUuid: slot.headUuid,
       label: h.label || h.boardName || 'Head',
-    }));
+    };
+  });
+
   res.json({
-    ip, label: panel.label, layout: panel.layout || '1080', heads,
+    ip, label: panel.label, layout: panel.layout || '1080', cols,
+    grid,
     showUuids: config.settings?.showUuids !== false,
   });
 });

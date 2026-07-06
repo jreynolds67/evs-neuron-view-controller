@@ -75,6 +75,25 @@
     a.tab.active { color: var(--accent); }
     .admin-clock { font-family: var(--mono, monospace); font-variant-numeric: tabular-nums;
       font-size: 13px; color: var(--ink-dim); margin-right: 20px; white-space: nowrap; }
+    /* Per-panel physical layout editor */
+    .layout-editor { margin-top: 6px; }
+    .lc-grid { display: grid; grid-template-columns: repeat(var(--cols, 7), 1fr); gap: 6px;
+      background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+    .lc-cell { min-height: 48px; border-radius: 6px; display: flex; align-items: center;
+      justify-content: center; text-align: center; font-size: 12px; padding: 4px;
+      overflow: hidden; line-height: 1.2; word-break: break-word; }
+    .lc-cell.blank { border: 1px dashed var(--line); color: var(--ink-faint); background: transparent; }
+    .lc-cell.blank::after { content: '·'; color: var(--ink-faint); }
+    .lc-cell.filled { background: var(--accent); color: #04121f; border: 1px solid var(--accent);
+      font-weight: 600; cursor: grab; }
+    .lc-cell.filled:active { cursor: grabbing; }
+    .lc-cell.over { outline: 2px solid var(--arm); outline-offset: -2px; }
+    .lc-tray { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .lc-tray.over { border-color: var(--arm); }
+    .lc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .lc-chip { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+      padding: 8px 12px; font-size: 13px; cursor: grab; }
+    .lc-chip:active { cursor: grabbing; }
   </style>
 </head>
 <body>

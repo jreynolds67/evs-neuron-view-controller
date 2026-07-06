@@ -76,6 +76,22 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
+/* Custom physical-layout grid: a FIXED number of equal columns (7 on 1080, 8 on strip),
+   set from the server via --layout-cols. Column width tracks the default flow (same 1fr
+   stretch, same 12px/8px gap), so each card is the exact same size as today — this only
+   pins the column COUNT and enables placement. Rows are natural height (16:9 preview +
+   name footer). The grid scrolls vertically if it's taller than the viewport. */
+.grid.head-grid-fixed {
+  grid-template-columns: repeat(var(--layout-cols, 7), minmax(0, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
+}
+/* A blank cell holds a head's worth of space but renders nothing. It stretches to the
+   row's height (set by sibling cards) so multiple blanks read as continuous empty space. */
+.grid.head-grid-fixed .layout-blank {
+  align-self: stretch;
+  min-height: var(--touch);
+}
 .card {
   min-height: var(--touch);
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);

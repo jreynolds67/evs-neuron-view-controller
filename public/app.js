@@ -179,10 +179,35 @@ async function renderHeads() {
   $('stageTitle').textContent = 'Select a head';
   $('stageHint').textContent = '';
   grid.innerHTML = '';
-  const heads = state.panel.heads || [];
-  if (!heads.length) return showEmpty('No heads assigned to this panel. Configure it in the admin page.');
 
-  heads.forEach((h) => {
+  const slots = state.panel.grid || [];
+  const cols = state.panel.cols || (state.panel.layout === 'strip' ? 8 : 7);
+
+  // The operator view is entirely placement-driven: heads appear only where the admin
+  // placed them in the panel's layout grid. No layout → nothing to show.
+  const hasHead = slots.some((s) => s && s.type === 'head');
+  if (!slots.length || !hasHead) {
+    grid.classList.remove('head-grid-fixed');
+    grid.style.removeProperty('--layout-cols');
+    return showEmpty('This panel has no layout yet. Arrange its heads in the admin page.');
+  }
+
+  // Fixed-column grid using today's exact cell width (240px / 200px). The column count is
+  // fixed (7 or 8); rows grow as needed and the grid scrolls vertically. This preserves
+  // the current card scaling exactly — cells are the same size they are today.
+  grid.classList.add('head-grid-fixed');
+  grid.style.setProperty('--layout-cols', String(cols));
+
+  slots.forEach((slot) => {
+    // Blank (or unresolved) slot: occupies one cell, shows nothing.
+    if (!slot || slot.type !== 'head') {
+      const blank = document.createElement('div');
+      blank.className = 'layout-blank';
+      grid.appendChild(blank);
+      return;
+    }
+
+    const h = slot; // { cardId, headUuid, label }
     const card = document.createElement('button');
     card.className = 'card card-with-preview';
     card.innerHTML = `
@@ -203,13 +228,12 @@ async function renderHeads() {
       expand.remove();
     } else {
       expand.addEventListener('click', (e) => {
-        e.stopPropagation(); // don't trigger the card's snapshot navigation
+        e.stopPropagation();
         openFullscreen(h);
       });
     }
 
     grid.appendChild(card);
-    // Lazy-load the live layout thumbnail for this head.
     loadPreviewInto(
       card.querySelector('[data-prev]'),
       `/api/panel/cards/${h.cardId}/heads/${h.headUuid}/preview`);
