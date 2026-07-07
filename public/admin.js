@@ -104,65 +104,124 @@ async function probeCardSnaps(cardId) {
   return list;
 }
 
+// Master-detail: a list of panels on the left, the selected panel's editor on the right.
+let selectedPanel = 0;
+
 function renderPanels() {
   const host = $('panelList'); host.innerHTML = '';
+
+  // Clamp selection to a valid index (handles deletes / empty).
+  if (selectedPanel >= config.panels.length) selectedPanel = config.panels.length - 1;
+  if (selectedPanel < 0) selectedPanel = 0;
+
+  const split = document.createElement('div');
+  split.className = 'panel-split';
+  split.innerHTML = `
+    <div class="panel-list" id="panelListCol"></div>
+    <div class="panel-detail" id="panelDetail"></div>`;
+  host.appendChild(split);
+
+  const listCol = split.querySelector('#panelListCol');
+  if (!config.panels.length) {
+    listCol.innerHTML = '<div class="muted" style="padding:10px">No panels yet. Add one below.</div>';
+  }
   config.panels.forEach((p, pi) => {
-    p.heads ||= [];
-    const box = document.createElement('div');
-    box.className = 'section'; box.style.background = 'var(--panel-2)';
-    box.innerHTML = `
-      <div class="inline" style="gap:12px">
-        <div style="flex:1"><label class="muted">Panel IP</label>
-          <input value="${p.ip || ''}" data-pi="${pi}" data-f="ip" placeholder="10.10.61.11"></div>
-        <div style="flex:1"><label class="muted">Label</label>
-          <input value="${p.label || ''}" data-pi="${pi}" data-f="label" placeholder="PCR 101 Panel"></div>
-        <div style="width:200px"><label class="muted">Layout</label>
-          <select data-pi="${pi}" data-f="layout">
-            <option value="1080"${p.layout === '1080' ? ' selected' : ''}>1920 × 1080</option>
-            <option value="strip"${p.layout === 'strip' ? ' selected' : ''}>1835 × 291 (CTP)</option>
-          </select></div>
-        <div style="align-self:flex-end" class="inline">
-          <button class="btn sm ghost" data-duppanel="${pi}">Duplicate</button>
-          <button class="btn sm del" data-delpanel="${pi}">Remove</button>
-        </div>
-      </div>
-      <div style="margin-top:14px">
-        <label class="muted">Heads on this panel (in display order)</label>
-        <div id="headList-${pi}" style="margin-top:6px"></div>
-        <div class="inline" style="margin-top:8px">
-          <button class="btn sm" data-addhead="${pi}">Add head</button>
-          <button class="btn sm ghost" data-addallheads="${pi}">Add all heads</button>
-          <span class="muted" id="addHeadState-${pi}"></span>
-        </div>
-        <div id="headPicker-${pi}"></div>
-      </div>
-      <div style="margin-top:18px">
-        <label class="muted">Physical layout — drag heads into the grid to match the monitor wall</label>
-        <div id="layoutEditor-${pi}" class="layout-editor"></div>
-      </div>`;
-    host.appendChild(box);
+    const item = document.createElement('button');
+    item.className = 'panel-list-item' + (pi === selectedPanel ? ' active' : '');
+    const name = p.label || p.ip || `Panel ${pi + 1}`;
+    const sub = p.ip && p.label ? p.ip : (p.layout === 'strip' ? 'CTP' : '1920×1080');
+    item.innerHTML = `<span class="pli-name"></span><span class="pli-sub muted"></span>`;
+    item.querySelector('.pli-name').textContent = name;
+    item.querySelector('.pli-sub').textContent = sub;
+    item.addEventListener('click', () => { selectedPanel = pi; renderPanels(); });
+    listCol.appendChild(item);
+  });
 
-    box.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('input', (e) => {
-      const field = e.target.dataset.f;
-      const prev = config.panels[pi][field];
-      config.panels[pi][field] = e.target.value;
-      // Changing the layout type changes the fixed column count (7 ↔ 8). The old grid was
-      // laid out for the previous width, so its rows no longer line up — clear it so the
-      // arrangement is rebuilt for the new shape, and re-render the editor.
-      if (field === 'layout' && e.target.value !== prev) {
-        config.panels[pi].layoutGrid = [];
-        renderLayoutEditor(pi);
-      }
-    }));
-    box.querySelector('[data-delpanel]').addEventListener('click', () => {
-      config.panels.splice(pi, 1); renderPanels();
-    });
-    box.querySelector('[data-duppanel]').addEventListener('click', () => duplicatePanel(pi));
-    box.querySelector(`[data-addhead="${pi}"]`).addEventListener('click', () => openHeadPicker(pi));
-    box.querySelector(`[data-addallheads="${pi}"]`).addEventListener('click', () => addAllHeads(pi));
+  renderPanelDetail(selectedPanel);
+}
 
-    renderHeadList(pi);
-    renderLayoutEditor(pi);
+function renderPanelDetail(pi) {
+  const detail = $('panelDetail');
+  if (!detail) return;
+  detail.innerHTML = '';
+  if (!config.panels.length || pi < 0 || pi >= config.panels.length) {
+    detail.innerHTML = '<div class="muted" style="padding:20px">Select a panel on the left, or add one.</div>';
+    return;
+  }
+
+  const p = config.panels[pi];
+  p.heads ||= [];
+  const box = document.createElement('div');
+  box.innerHTML = `
+    <div class="inline" style="gap:12px">
+      <div style="flex:1"><label class="muted">Panel IP</label>
+        <input value="${p.ip || ''}" data-pi="${pi}" data-f="ip" placeholder="10.10.61.11"></div>
+      <div style="flex:1"><label class="muted">Label</label>
+        <input value="${p.label || ''}" data-pi="${pi}" data-f="label" placeholder="PCR 101 Panel"></div>
+      <div style="width:200px"><label class="muted">Layout</label>
+        <select data-pi="${pi}" data-f="layout">
+          <option value="1080"${p.layout === '1080' ? ' selected' : ''}>1920 × 1080</option>
+          <option value="strip"${p.layout === 'strip' ? ' selected' : ''}>1835 × 291 (CTP)</option>
+        </select></div>
+      <div style="align-self:flex-end" class="inline">
+        <button class="btn sm ghost" data-duppanel="${pi}">Duplicate</button>
+        <button class="btn sm del" data-delpanel="${pi}">Remove</button>
+      </div>
+    </div>
+    <div style="margin-top:14px">
+      <label class="muted">Heads on this panel (in display order)</label>
+      <div id="headList-${pi}" style="margin-top:6px"></div>
+      <div class="inline" style="margin-top:8px">
+        <button class="btn sm" data-addhead="${pi}">Add head</button>
+        <button class="btn sm ghost" data-addallheads="${pi}">Add all heads</button>
+        <span class="muted" id="addHeadState-${pi}"></span>
+      </div>
+      <div id="headPicker-${pi}"></div>
+    </div>
+    <div style="margin-top:18px">
+      <label class="muted">Physical layout — drag heads into the grid to match the monitor wall</label>
+      <div id="layoutEditor-${pi}" class="layout-editor"></div>
+    </div>`;
+  detail.appendChild(box);
+
+  box.querySelectorAll('[data-f]').forEach((el) => el.addEventListener('input', (e) => {
+    const field = e.target.dataset.f;
+    const prev = config.panels[pi][field];
+    config.panels[pi][field] = e.target.value;
+    // The label/IP in the left list should update live as you type.
+    if (field === 'label' || field === 'ip') refreshPanelListLabels();
+    // Changing the layout type changes the fixed column count (7 ↔ 8). The old grid was
+    // laid out for the previous width, so its rows no longer line up — clear it so the
+    // arrangement is rebuilt for the new shape, and re-render the editor.
+    if (field === 'layout' && e.target.value !== prev) {
+      config.panels[pi].layoutGrid = [];
+      renderLayoutEditor(pi);
+    }
+  }));
+  box.querySelector('[data-delpanel]').addEventListener('click', () => {
+    config.panels.splice(pi, 1);
+    if (selectedPanel >= pi && selectedPanel > 0) selectedPanel--;
+    renderPanels();
+  });
+  box.querySelector('[data-duppanel]').addEventListener('click', () => duplicatePanel(pi));
+  box.querySelector(`[data-addhead="${pi}"]`).addEventListener('click', () => openHeadPicker(pi));
+  box.querySelector(`[data-addallheads="${pi}"]`).addEventListener('click', () => addAllHeads(pi));
+
+  renderHeadList(pi);
+  renderLayoutEditor(pi);
+}
+
+// Update just the left-list names/subs without a full re-render (so typing doesn't steal
+// focus from the input being edited).
+function refreshPanelListLabels() {
+  const items = document.querySelectorAll('#panelListCol .panel-list-item');
+  items.forEach((item, pi) => {
+    const p = config.panels[pi];
+    if (!p) return;
+    const name = p.label || p.ip || `Panel ${pi + 1}`;
+    const sub = p.ip && p.label ? p.ip : (p.layout === 'strip' ? 'CTP' : '1920×1080');
+    item.querySelector('.pli-name').textContent = name;
+    item.querySelector('.pli-sub').textContent = sub;
   });
 }
 
@@ -473,6 +532,7 @@ async function addAllHeads(pi) {
 
 $('addPanel').addEventListener('click', () => {
   config.panels.push({ ip: '', label: '', layout: '1080', heads: [] });
+  selectedPanel = config.panels.length - 1; // open the new panel
   renderPanels();
 });
 
@@ -485,6 +545,7 @@ function duplicatePanel(pi) {
   copy.ip = '';                                  // must be unique — clear for the new panel
   copy.label = (src.label ? `${src.label} (copy)` : 'Panel (copy)');
   config.panels.splice(pi + 1, 0, copy);         // insert directly after the original
+  selectedPanel = pi + 1;                         // open the new copy
   renderPanels();
   // Nudge the user toward the field that needs attention.
   const state = $(`addHeadState-${pi + 1}`);
