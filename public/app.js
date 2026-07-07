@@ -483,7 +483,6 @@ async function openFullscreen(head) {
   const ov = $('fsOverlay');
   ov.classList.add('show');
   $('fsTitle').textContent = head.label || 'Head';
-  $('fsGui').textContent = 'Open board GUI'; // reset toggle each time the view opens
   $('fsBody').innerHTML = '<div class="preview-loading" style="padding:40px">Loading windows…</div>';
 
   try {
@@ -501,36 +500,6 @@ async function openFullscreen(head) {
 function closeFullscreen() {
   $('fsOverlay').classList.remove('show');
   fsState = null;
-}
-
-// Load the native web GUI of the enlarged head's board INTO the fullscreen body as an
-// embedded iframe — the header bar (with Close and this button) stays on top. The server
-// resolves the card's URL (IPs aren't otherwise exposed to the panel). The button then
-// toggles back to the input editor.
-async function openBoardGui() {
-  if (!fsState || !fsState.head) return;
-  const btn = $('fsGui');
-  // If the GUI is already showing, this button acts as "back to inputs".
-  if (fsState.guiOpen) {
-    fsState.guiOpen = false;
-    btn.textContent = 'Open board GUI';
-    renderFullscreen();
-    return;
-  }
-  try {
-    const { url } = await api(`/api/panel/cards/${fsState.head.cardId}/gui-url`);
-    if (!url) return;
-    fsState.guiOpen = true;
-    btn.textContent = 'Back to inputs';
-    const body = $('fsBody');
-    body.innerHTML = '';
-    const frame = document.createElement('iframe');
-    frame.className = 'fs-gui-frame';
-    frame.src = url;
-    body.appendChild(frame);
-  } catch (e) {
-    toast(e.message || 'Could not open board GUI', 'err');
-  }
 }
 
 function groupByUuid(uuid) {
@@ -623,7 +592,6 @@ async function boot() {
   $('backBtn').addEventListener('click', back);
   $('restartBtn').addEventListener('click', restart);
   $('fsClose').addEventListener('click', closeFullscreen);
-  $('fsGui').addEventListener('click', openBoardGui);
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
 

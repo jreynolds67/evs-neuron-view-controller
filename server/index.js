@@ -16,7 +16,7 @@ import {
   getSnapshotModel, extractSnapshotHeads, restorePartial,
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
-  getInputGroups, setWidgetGroup, boardGuiUrl,
+  getInputGroups, setWidgetGroup,
 } from './board.js';
 import { getEntries, clear as clearLog } from './logger.js';
 import { startShareSweep, shareSweepStatus, runShareSweepNow, applyShareSweepConfig } from './sharesweep.js';
@@ -243,15 +243,6 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
     const widgets = await getHeadWidgets(card.ip, req.params.headUuid);
     res.json({ widgets: (widgets || []).map(normalizeWidgetForPreview) });
   } catch (e) { sendErr(res, e); }
-});
-
-// The board's native web GUI URL for a card (root, not the API). Authorized per-panel so
-// a panel only gets URLs for cards it's allowed to reach. The panel opens this directly.
-app.get('/api/panel/cards/:cardId/gui-url', async (req, res) => {
-  const r = await resolveCardRequest(req, res);
-  if (!r) return;
-  const { card } = r;
-  res.json({ url: boardGuiUrl(card.ip) });
 });
 
 // Extract an operator-facing input NUMBER from a group. Names typically embed a number

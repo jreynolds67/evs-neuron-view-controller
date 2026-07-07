@@ -39,19 +39,6 @@ function boardBase(ip) {
   return `${SCHEME}://${ip}${portSuffix()}/api/v1`;
 }
 
-// Root URL of the board's native web GUI (not the API). The GUI is served over plain
-// HTTP even though the API is HTTPS, so it uses its own scheme (default http; override
-// with BOARD_GUI_SCHEME). No port suffix unless BOARD_GUI_PORT is set to something
-// nonstandard for that scheme.
-const GUI_SCHEME = (process.env.BOARD_GUI_SCHEME || 'http').toLowerCase();
-const GUI_PORT = process.env.BOARD_GUI_PORT || (GUI_SCHEME === 'https' ? '443' : '80');
-export function boardGuiUrl(ip) {
-  const isDefault = (GUI_SCHEME === 'https' && GUI_PORT === '443') ||
-    (GUI_SCHEME === 'http' && GUI_PORT === '80');
-  const suffix = isDefault ? '' : `:${GUI_PORT}`;
-  return `${GUI_SCHEME}://${ip}${suffix}/`;
-}
-
 async function boardFetch(ip, path, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
