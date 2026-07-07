@@ -103,12 +103,15 @@
     .panel-list-item.drop-after { box-shadow: 0 2px 0 0 var(--arm); }
     .panel-list-item .pli-name { font-weight: 600; font-size: 14px; }
     .panel-list-item .pli-sub { font-size: 12px; }
-    /* Group headers in the panel list. Drop a panel onto one to move it into that group. */
+    /* Group headers in the panel list. Click to collapse; drop a panel onto one to move it in. */
     .panel-group-head { display: flex; align-items: center; gap: 6px; padding: 8px 4px 2px;
       font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
-      color: var(--ink-dim); border-bottom: 1px solid var(--line); }
+      color: var(--ink-dim); border-bottom: 1px solid var(--line); cursor: pointer; }
+    .panel-group-head:hover { color: var(--ink); }
     .panel-group-head.over { border-bottom-color: var(--arm); color: var(--ink); }
+    .panel-group-head .pgh-caret { width: 12px; font-size: 10px; color: var(--ink-faint); }
     .panel-group-head .pgh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .panel-group-head .pgh-count { font-size: 11px; font-weight: 500; }
     .panel-group-head .pgh-btn { background: transparent; border: none; color: var(--ink-faint);
       cursor: pointer; font-size: 13px; padding: 2px 4px; line-height: 1; }
     .panel-group-head .pgh-btn:hover { color: var(--ink); }

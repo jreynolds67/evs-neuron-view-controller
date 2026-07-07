@@ -135,9 +135,13 @@ function panelGroups() {
   return config.panelGroups;
 }
 
-// Build the grouped, drag-reorderable panel list. Ungrouped panels render first (under no
-// header), then each named group with its header. Dragging a panel reorders config.panels
-// and, when dropped under a group header or among that group's panels, sets its group.
+// Transient (not persisted) set of collapsed group names — collapse is a view preference.
+const collapsedGroups = new Set();
+
+// Build the grouped, drag-reorderable panel list. Named groups render first (each with a
+// collapsible header), then ungrouped panels at the bottom under an "Ungrouped" header.
+// Dragging a panel reorders config.panels and, dropped on a header or among a group's
+// panels, sets its group.
 function renderPanelListInto(listCol) {
   listCol.innerHTML = '';
   if (!config.panels.length) {
@@ -151,36 +155,55 @@ function renderPanelListInto(listCol) {
     const g = p.group || '';
     if (g && !groups.includes(g)) groups.push(g);
   });
-  // Section order: ungrouped (""), then each named group in stored order.
-  const sections = ['', ...groups];
+  // Section order: named groups (in stored order) first, then ungrouped ("") at the bottom.
+  const sections = [...groups, ''];
 
   sections.forEach((group) => {
-    if (group !== '') {
-      const head = document.createElement('div');
-      head.className = 'panel-group-head';
-      head.dataset.group = group;
-      head.innerHTML = `<span class="pgh-name"></span>
-        <button class="pgh-btn" data-rename title="Rename group">✎</button>
-        <button class="pgh-btn" data-delgroup title="Delete group (keeps panels)">✕</button>`;
-      head.querySelector('.pgh-name').textContent = group;
+    const isUngrouped = group === '';
+    const panelsIn = [];
+    config.panels.forEach((p, pi) => { if ((p.group || '') === group) panelsIn.push(pi); });
+
+    // Skip the ungrouped section entirely if there are none, to avoid an empty header.
+    if (isUngrouped && !panelsIn.length) return;
+
+    const collapsed = collapsedGroups.has(group);
+    const head = document.createElement('div');
+    head.className = 'panel-group-head' + (collapsed ? ' collapsed' : '');
+    head.dataset.group = group;
+    // Ungrouped header has a caret + label + count, but no rename/delete controls.
+    const controls = isUngrouped ? '' :
+      `<button class="pgh-btn" data-rename title="Rename group">✎</button>
+       <button class="pgh-btn" data-delgroup title="Delete group (keeps panels)">✕</button>`;
+    head.innerHTML = `<span class="pgh-caret">${collapsed ? '▸' : '▾'}</span>
+      <span class="pgh-name"></span>
+      <span class="pgh-count muted">${panelsIn.length}</span>
+      ${controls}`;
+    head.querySelector('.pgh-name').textContent = isUngrouped ? 'Ungrouped' : group;
+    // Clicking the header (not its buttons) toggles collapse.
+    head.addEventListener('click', () => {
+      if (collapsed) collapsedGroups.delete(group); else collapsedGroups.add(group);
+      renderPanels();
+    });
+    if (!isUngrouped) {
       head.querySelector('[data-rename]').addEventListener('click', (e) => { e.stopPropagation(); renameGroup(group); });
       head.querySelector('[data-delgroup]').addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(group); });
-      // Dropping a panel onto the header moves it into this group (appended at the end).
-      head.addEventListener('dragover', (e) => { e.preventDefault(); head.classList.add('over'); });
-      head.addEventListener('dragleave', () => head.classList.remove('over'));
-      head.addEventListener('drop', (e) => {
-        e.preventDefault(); head.classList.remove('over');
-        const pi = dragPanelIndex(e); if (pi == null) return;
-        movePanelToGroup(pi, group, null);
-      });
-      listCol.appendChild(head);
     }
-
-    // Panels belonging to this section, in their config.panels order.
-    config.panels.forEach((p, pi) => {
-      if ((p.group || '') !== group) return;
-      listCol.appendChild(buildPanelListItem(p, pi));
+    // Dropping a panel onto the header moves it into this group (appended at the end). If
+    // the group is collapsed, dropping onto it also expands it so you can see the result.
+    head.addEventListener('dragover', (e) => { e.preventDefault(); head.classList.add('over'); });
+    head.addEventListener('dragleave', () => head.classList.remove('over'));
+    head.addEventListener('drop', (e) => {
+      e.preventDefault(); head.classList.remove('over');
+      const pi = dragPanelIndex(e); if (pi == null) return;
+      collapsedGroups.delete(group);
+      movePanelToGroup(pi, group, null);
     });
+    listCol.appendChild(head);
+
+    // Panels belonging to this section, hidden when the group is collapsed.
+    if (!collapsed) {
+      panelsIn.forEach((pi) => listCol.appendChild(buildPanelListItem(config.panels[pi], pi)));
+    }
   });
 
   // "New group" affordance at the bottom.
@@ -271,6 +294,7 @@ function movePanelToGroup(from, group, pos) {
   insertAt = Math.max(0, Math.min(insertAt, config.panels.length));
   config.panels.splice(insertAt, 0, panel);
   selectedPanel = insertAt;
+  collapsedGroups.delete(group || ''); // keep the moved (now selected) panel visible
   renderPanels();
 }
 function lastIndexOfGroup(group) {
