@@ -39,6 +39,12 @@ function boardBase(ip) {
   return `${SCHEME}://${ip}${portSuffix()}/api/v1`;
 }
 
+// Root URL of the board's native web GUI (not the API). Uses the same scheme/port as the
+// API client so a nonstandard BOARD_PORT is honoured.
+export function boardGuiUrl(ip) {
+  return `${SCHEME}://${ip}${portSuffix()}/`;
+}
+
 async function boardFetch(ip, path, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);

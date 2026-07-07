@@ -502,6 +502,18 @@ function closeFullscreen() {
   fsState = null;
 }
 
+// Open the native web GUI of the enlarged head's board. The server resolves the card's
+// URL (IPs aren't otherwise exposed to the panel) and we open it in a new tab.
+async function openBoardGui() {
+  if (!fsState || !fsState.head) return;
+  try {
+    const { url } = await api(`/api/panel/cards/${fsState.head.cardId}/gui-url`);
+    if (url) window.open(url, '_blank', 'noopener');
+  } catch (e) {
+    toast(e.message || 'Could not open board GUI', 'err');
+  }
+}
+
 function groupByUuid(uuid) {
   return fsState.groups.find((g) => g.uuid === uuid) || null;
 }
@@ -592,6 +604,7 @@ async function boot() {
   $('backBtn').addEventListener('click', back);
   $('restartBtn').addEventListener('click', restart);
   $('fsClose').addEventListener('click', closeFullscreen);
+  $('fsGui').addEventListener('click', openBoardGui);
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
 
