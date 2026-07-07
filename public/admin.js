@@ -170,7 +170,7 @@ function renderPanelDetail(pi) {
     </div>
     <div style="margin-top:14px">
       <label class="inline" style="cursor:pointer; gap:8px">
-        <input type="checkbox" data-pi="${pi}" data-f="allowShowAll" ${p.allowShowAll ? 'checked' : ''} style="width:18px;height:18px">
+        <input type="checkbox" id="allowShowAll-${pi}" ${p.allowShowAll ? 'checked' : ''} style="width:18px;height:18px">
         <span>Allow operators to temporarily “Show all snapshots” on this panel</span>
       </label>
     </div>
@@ -210,6 +210,14 @@ function renderPanelDetail(pi) {
     if (selectedPanel >= pi && selectedPanel > 0) selectedPanel--;
     renderPanels();
   });
+  // Dedicated handler for the "allow show all" checkbox — writes directly to config on
+  // change (the canonical checkbox event), so the flag reliably persists on Save.
+  const showAllCb = box.querySelector(`#allowShowAll-${pi}`);
+  if (showAllCb) {
+    showAllCb.addEventListener('change', (e) => {
+      config.panels[pi].allowShowAll = e.target.checked;
+    });
+  }
   box.querySelector('[data-duppanel]').addEventListener('click', () => duplicatePanel(pi));
   box.querySelector(`[data-addhead="${pi}"]`).addEventListener('click', () => openHeadPicker(pi));
   box.querySelector(`[data-addallheads="${pi}"]`).addEventListener('click', () => addAllHeads(pi));
