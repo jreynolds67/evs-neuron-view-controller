@@ -197,11 +197,12 @@ function renderPanelDetail(pi) {
     config.panels[pi][field] = val;
     // The label/IP in the left list should update live as you type.
     if (field === 'label' || field === 'ip') refreshPanelListLabels();
-    // Changing the layout type changes the fixed column count (7 ↔ 8). The old grid was
-    // laid out for the previous width, so its rows no longer line up — clear it so the
-    // arrangement is rebuilt for the new shape, and re-render the editor.
+    // Changing the layout type changes the fixed column count (7 ↔ 8). Rather than wiping
+    // the arrangement, reshape it row-by-row so existing placements stay put: growing
+    // 7→8 appends a blank column, shrinking 8→7 drops the 8th column (any head there
+    // becomes unplaced and returns to the tray).
     if (field === 'layout' && val !== prev) {
-      config.panels[pi].layoutGrid = [];
+      reshapeGridColumns(config.panels[pi], prev, val);
       renderLayoutEditor(pi);
     }
   }));
@@ -293,6 +294,34 @@ function renderHeadList(pi) {
 // is a head ref or a blank spacer. Stored as panel.layoutGrid = [ slot, ... ] row-major.
 
 function layoutCols(panel) { return panel.layout === 'strip' ? 8 : 7; }
+
+// Column count for a given layout value (the panel's `layout` field, "1080" | "strip").
+function colsForLayout(layout) { return layout === 'strip' ? 8 : 7; }
+
+// Re-flow the row-major layoutGrid when the column count changes, keeping every existing
+// placement in its row and column. Growing (7→8) appends a blank cell to each row;
+// shrinking (8→7) drops the last cell of each row — a head that was there becomes
+// unplaced (it stays in panel.heads, so it reappears in the "Unplaced heads" tray).
+function reshapeGridColumns(panel, prevLayout, nextLayout) {
+  const prevCols = colsForLayout(prevLayout);
+  const nextCols = colsForLayout(nextLayout);
+  const grid = Array.isArray(panel.layoutGrid) ? panel.layoutGrid : [];
+  if (prevCols === nextCols || !grid.length) return; // nothing to reshape
+
+  const out = [];
+  for (let start = 0; start < grid.length; start += prevCols) {
+    const row = grid.slice(start, start + prevCols);
+    if (nextCols > prevCols) {
+      // Pad the row up to the new width with blanks.
+      while (row.length < nextCols) row.push({ type: 'blank' });
+    } else {
+      // Truncate the row to the new width (drops the overflow cells / their heads).
+      row.length = nextCols;
+    }
+    for (const cell of row) out.push(cell || { type: 'blank' });
+  }
+  panel.layoutGrid = out;
+}
 
 // Ensure the grid array exists and is sized to a whole number of rows.
 function ensureGrid(p) {
