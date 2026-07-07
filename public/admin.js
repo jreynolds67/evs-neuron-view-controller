@@ -26,6 +26,7 @@ async function loadConfig() {
     config = await res.json();
     config.cards ||= []; config.panels ||= [];
     config.headFilters ||= {};
+    config.panelGroups ||= [];
     config.settings ||= { showUuids: true };
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();
@@ -122,22 +123,187 @@ function renderPanels() {
   host.appendChild(split);
 
   const listCol = split.querySelector('#panelListCol');
-  if (!config.panels.length) {
-    listCol.innerHTML = '<div class="muted" style="padding:10px">No panels yet. Add one below.</div>';
-  }
-  config.panels.forEach((p, pi) => {
-    const item = document.createElement('button');
-    item.className = 'panel-list-item' + (pi === selectedPanel ? ' active' : '');
-    const name = p.label || p.ip || `Panel ${pi + 1}`;
-    const sub = p.ip && p.label ? p.ip : (p.layout === 'strip' ? 'CTP' : '1920×1080');
-    item.innerHTML = `<span class="pli-name"></span><span class="pli-sub muted"></span>`;
-    item.querySelector('.pli-name').textContent = name;
-    item.querySelector('.pli-sub').textContent = sub;
-    item.addEventListener('click', () => { selectedPanel = pi; renderPanels(); });
-    listCol.appendChild(item);
-  });
+  renderPanelListInto(listCol);
 
   renderPanelDetail(selectedPanel);
+}
+
+// Ordered list of group names. Persisted so empty groups survive. Panels reference a group
+// by name via panel.group; a missing/empty group means "ungrouped".
+function panelGroups() {
+  if (!Array.isArray(config.panelGroups)) config.panelGroups = [];
+  return config.panelGroups;
+}
+
+// Build the grouped, drag-reorderable panel list. Ungrouped panels render first (under no
+// header), then each named group with its header. Dragging a panel reorders config.panels
+// and, when dropped under a group header or among that group's panels, sets its group.
+function renderPanelListInto(listCol) {
+  listCol.innerHTML = '';
+  if (!config.panels.length) {
+    listCol.innerHTML = '<div class="muted" style="padding:10px">No panels yet. Add one above.</div>';
+  }
+
+  const groups = panelGroups();
+  // Defensive: if any panel references a group not in the list (imported config, etc.),
+  // add it so those panels still render under a header rather than vanishing.
+  config.panels.forEach((p) => {
+    const g = p.group || '';
+    if (g && !groups.includes(g)) groups.push(g);
+  });
+  // Section order: ungrouped (""), then each named group in stored order.
+  const sections = ['', ...groups];
+
+  sections.forEach((group) => {
+    if (group !== '') {
+      const head = document.createElement('div');
+      head.className = 'panel-group-head';
+      head.dataset.group = group;
+      head.innerHTML = `<span class="pgh-name"></span>
+        <button class="pgh-btn" data-rename title="Rename group">✎</button>
+        <button class="pgh-btn" data-delgroup title="Delete group (keeps panels)">✕</button>`;
+      head.querySelector('.pgh-name').textContent = group;
+      head.querySelector('[data-rename]').addEventListener('click', (e) => { e.stopPropagation(); renameGroup(group); });
+      head.querySelector('[data-delgroup]').addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(group); });
+      // Dropping a panel onto the header moves it into this group (appended at the end).
+      head.addEventListener('dragover', (e) => { e.preventDefault(); head.classList.add('over'); });
+      head.addEventListener('dragleave', () => head.classList.remove('over'));
+      head.addEventListener('drop', (e) => {
+        e.preventDefault(); head.classList.remove('over');
+        const pi = dragPanelIndex(e); if (pi == null) return;
+        movePanelToGroup(pi, group, null);
+      });
+      listCol.appendChild(head);
+    }
+
+    // Panels belonging to this section, in their config.panels order.
+    config.panels.forEach((p, pi) => {
+      if ((p.group || '') !== group) return;
+      listCol.appendChild(buildPanelListItem(p, pi));
+    });
+  });
+
+  // "New group" affordance at the bottom.
+  const addG = document.createElement('button');
+  addG.className = 'panel-group-add';
+  addG.textContent = '+ New group';
+  addG.addEventListener('click', addGroup);
+  listCol.appendChild(addG);
+}
+
+function buildPanelListItem(p, pi) {
+  const item = document.createElement('button');
+  item.className = 'panel-list-item' + (pi === selectedPanel ? ' active' : '');
+  item.dataset.pi = pi;
+  item.draggable = true;
+  const name = p.label || p.ip || `Panel ${pi + 1}`;
+  const sub = p.ip && p.label ? p.ip : (p.layout === 'strip' ? 'CTP' : '1920×1080');
+  item.innerHTML = `<span class="pli-name"></span><span class="pli-sub muted"></span>`;
+  item.querySelector('.pli-name').textContent = name;
+  item.querySelector('.pli-sub').textContent = sub;
+  item.addEventListener('click', () => { selectedPanel = pi; renderPanels(); });
+
+  item.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'panel', pi }));
+    e.dataTransfer.effectAllowed = 'move';
+    item.classList.add('dragging');
+  });
+  item.addEventListener('dragend', () => {
+    item.classList.remove('dragging');
+    document.querySelectorAll('.panel-list-item.drop-before,.panel-list-item.drop-after')
+      .forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+  });
+  item.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const before = isBeforeMidpoint(e, item);
+    item.classList.toggle('drop-before', before);
+    item.classList.toggle('drop-after', !before);
+  });
+  item.addEventListener('dragleave', () => item.classList.remove('drop-before', 'drop-after'));
+  item.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const before = isBeforeMidpoint(e, item);
+    item.classList.remove('drop-before', 'drop-after');
+    const from = dragPanelIndex(e); if (from == null) return;
+    const targetPi = pi;
+    // Move to the dropped panel's group, positioned before/after the target.
+    movePanelToGroup(from, config.panels[targetPi].group || '', { targetPi, before });
+  });
+  return item;
+}
+
+// Parse a panel-drag payload's source index from a drop event.
+function dragPanelIndex(e) {
+  let payload;
+  try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return null; }
+  if (!payload || payload.kind !== 'panel' || typeof payload.pi !== 'number') return null;
+  return payload.pi;
+}
+function isBeforeMidpoint(e, el) {
+  const r = el.getBoundingClientRect();
+  return (e.clientY - r.top) < r.height / 2;
+}
+
+// Move panel at index `from` into `group`, optionally positioned relative to a target panel.
+// When `pos` is null the panel is appended at the end of that group's run.
+function movePanelToGroup(from, group, pos) {
+  const panel = config.panels[from];
+  if (!panel) return;
+  // Dropping a panel onto itself with the same group is a no-op — avoid a needless
+  // reindex that could visibly "jump" the selection.
+  if (pos && pos.targetPi === from && (panel.group || '') === (group || '')) return;
+  panel.group = group || '';
+  // Pull the panel out, then reinsert at the right spot.
+  config.panels.splice(from, 1);
+
+  let insertAt;
+  if (pos && typeof pos.targetPi === 'number') {
+    // Recompute the target's current index (it may have shifted after the splice).
+    let target = pos.targetPi;
+    if (from < pos.targetPi) target -= 1;
+    insertAt = pos.before ? target : target + 1;
+  } else {
+    // Append after the last panel currently in this group; if none, after the last panel
+    // of the preceding sections so it lands under the right header.
+    insertAt = lastIndexOfGroup(group);
+    insertAt = insertAt < 0 ? config.panels.length : insertAt + 1;
+  }
+  insertAt = Math.max(0, Math.min(insertAt, config.panels.length));
+  config.panels.splice(insertAt, 0, panel);
+  selectedPanel = insertAt;
+  renderPanels();
+}
+function lastIndexOfGroup(group) {
+  let idx = -1;
+  config.panels.forEach((p, i) => { if ((p.group || '') === group) idx = i; });
+  return idx;
+}
+
+function addGroup() {
+  const name = (prompt('New group name:') || '').trim();
+  if (!name) return;
+  const groups = panelGroups();
+  if (groups.includes(name)) { toast('Group already exists', 'err'); return; }
+  groups.push(name);
+  renderPanels();
+}
+function renameGroup(oldName) {
+  const name = (prompt('Rename group:', oldName) || '').trim();
+  if (!name || name === oldName) return;
+  const groups = panelGroups();
+  if (groups.includes(name)) { toast('Group already exists', 'err'); return; }
+  const i = groups.indexOf(oldName);
+  if (i >= 0) groups[i] = name;
+  config.panels.forEach((p) => { if ((p.group || '') === oldName) p.group = name; });
+  renderPanels();
+}
+function deleteGroup(name) {
+  // Removing a group keeps its panels — they become ungrouped.
+  const groups = panelGroups();
+  const i = groups.indexOf(name);
+  if (i >= 0) groups.splice(i, 1);
+  config.panels.forEach((p) => { if ((p.group || '') === name) p.group = ''; });
+  renderPanels();
 }
 
 function renderPanelDetail(pi) {
@@ -228,10 +394,12 @@ function renderPanelDetail(pi) {
 }
 
 // Update just the left-list names/subs without a full re-render (so typing doesn't steal
-// focus from the input being edited).
+// focus from the input being edited). Items carry data-pi since grouping means DOM order
+// no longer matches config.panels index order.
 function refreshPanelListLabels() {
   const items = document.querySelectorAll('#panelListCol .panel-list-item');
-  items.forEach((item, pi) => {
+  items.forEach((item) => {
+    const pi = +item.dataset.pi;
     const p = config.panels[pi];
     if (!p) return;
     const name = p.label || p.ip || `Panel ${pi + 1}`;
@@ -251,12 +419,18 @@ function renderHeadList(pi) {
   // keep order field in sync with array position
   p.heads.forEach((h, i) => { h.order = i; });
 
+  const clearDropMarks = () => host.querySelectorAll('.assigned-head.drop-before,.assigned-head.drop-after')
+    .forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+
   p.heads.forEach((h, i) => {
     const card = config.cards.find((c) => c.id === h.cardId);
     const row = document.createElement('div');
     row.className = 'assigned-head';
+    row.draggable = true;
+    row.dataset.idx = i;
     row.innerHTML = `
       <div class="ah-top">
+        <span class="ah-drag" title="Drag to reorder">⋮⋮</span>
         <span class="order-pos">${i + 1}</span>
         <input class="ah-label" placeholder="${h.boardName || 'Display label'}" value="${h.label || ''}">
         <span class="ah-source muted"></span>
@@ -264,8 +438,6 @@ function renderHeadList(pi) {
           <input type="checkbox" class="ah-all-cb" ${h.showAllSnapshots ? 'checked' : ''}>
           <span>All snapshots</span>
         </label>
-        <button class="btn sm ghost ah-up" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button class="btn sm ghost ah-down" ${i === p.heads.length - 1 ? 'disabled' : ''}>↓</button>
         <button class="btn sm del ah-del">Remove</button>
       </div>`;
     row.querySelector('.ah-source').textContent =
@@ -275,17 +447,50 @@ function renderHeadList(pi) {
     row.querySelector('.ah-all-cb').addEventListener('change', (e) => {
       if (e.target.checked) h.showAllSnapshots = true; else delete h.showAllSnapshots;
     });
-    row.querySelector('.ah-up').addEventListener('click', () => {
-      [p.heads[i - 1], p.heads[i]] = [p.heads[i], p.heads[i - 1]]; renderHeadList(pi);
-    });
-    row.querySelector('.ah-down').addEventListener('click', () => {
-      [p.heads[i + 1], p.heads[i]] = [p.heads[i], p.heads[i + 1]]; renderHeadList(pi);
-    });
     row.querySelector('.ah-del').addEventListener('click', () => {
       p.heads.splice(i, 1); renderHeadList(pi); renderLayoutEditor(pi);
     });
+
+    // Drag-to-reorder within this panel's head list.
+    row.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'head', idx: i }));
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', () => { row.classList.remove('dragging'); clearDropMarks(); });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const before = isBeforeMidpoint(e, row);
+      row.classList.toggle('drop-before', before);
+      row.classList.toggle('drop-after', !before);
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-before', 'drop-after'));
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const before = isBeforeMidpoint(e, row);
+      clearDropMarks();
+      let payload;
+      try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+      if (!payload || payload.kind !== 'head' || typeof payload.idx !== 'number') return;
+      reorderHead(pi, payload.idx, i, before);
+    });
+
     host.appendChild(row);
   });
+}
+
+// Move a head from index `from` to sit before/after the head currently at `target`.
+function reorderHead(pi, from, target, before) {
+  const heads = config.panels[pi].heads;
+  if (from === target) return;
+  const [moved] = heads.splice(from, 1);
+  let insertAt = target;
+  if (from < target) insertAt -= 1;      // target shifted left after removal
+  if (!before) insertAt += 1;            // drop after the target
+  insertAt = Math.max(0, Math.min(insertAt, heads.length));
+  heads.splice(insertAt, 0, moved);
+  renderHeadList(pi);
+  renderLayoutEditor(pi);
 }
 
 // ---- Per-panel physical layout editor ------------------------------------
@@ -751,6 +956,7 @@ $('importFile').addEventListener('change', async (e) => {
     config = parsed;
     config.cards ||= []; config.panels ||= [];
     config.headFilters ||= {};
+    config.panelGroups ||= [];
     config.settings ||= { showUuids: true };
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();

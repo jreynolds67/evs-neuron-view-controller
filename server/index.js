@@ -357,6 +357,7 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   }
   next.settings = { showUuids: true, ...(next.settings || {}) };
   if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
+  if (!Array.isArray(next.panelGroups)) next.panelGroups = [];
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
   // Preserve backup config (managed via its own endpoint) if the admin PUT omits it.
   if (next.backup === undefined) {
