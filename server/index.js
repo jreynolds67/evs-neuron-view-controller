@@ -152,6 +152,7 @@ app.get('/api/panel/me', async (req, res) => {
     ip, label: panel.label, layout: panel.layout || '1080', cols,
     grid,
     showUuids: config.settings?.showUuids !== false,
+    allowShowAll: panel.allowShowAll === true,
   });
 });
 
