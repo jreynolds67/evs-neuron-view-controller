@@ -160,11 +160,16 @@ app.get('/api/panel/me', async (req, res) => {
 app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
-  const { config, card, panelHead } = r;
+  const { config, panel, card, panelHead } = r;
 
   try {
     const info = await getSnapshotInfo(card.ip);
-    const allow = resolveAllowedSnapshots(config, panelHead, req.params.cardId, req.params.headUuid);
+    // "Show all" is honoured only when the panel is configured to allow it. When active,
+    // the per-head filter is bypassed so every snapshot for this head is offered.
+    const showAll = req.query.showAll === '1' && panel.allowShowAll === true;
+    const allow = showAll
+      ? null
+      : resolveAllowedSnapshots(config, panelHead, req.params.cardId, req.params.headUuid);
     const includeDeleted = req.query.includeDeleted === '1';
 
     // Normalise entries (string UUIDs or richer objects) to a consistent shape.

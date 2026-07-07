@@ -178,6 +178,7 @@ async function renderHeads() {
   state.step = 'head'; setSteps();
   state.head = null; state.snap = null; state.srcHead = null;
   state.showAllActive = false; // heads view always starts from the filtered state
+  clearShowAllButton();        // the footer toggle only belongs on the snapshot step
   $('stageTitle').textContent = 'Select a head';
   $('stageHint').textContent = '';
   grid.innerHTML = '';
@@ -242,6 +243,24 @@ async function renderHeads() {
   });
 }
 
+// Render the "Show all" toggle into the footer slot. Only appears on the snapshot step
+// and only when this panel is permitted to show all. Clearing the slot removes it.
+function renderShowAllButton() {
+  const slot = $('showAllSlot');
+  if (!slot) return;
+  slot.innerHTML = '';
+  if (!state.panel || !state.panel.allowShowAll) return;
+  const btn = document.createElement('button');
+  btn.className = 'btn ghost showall-btn' + (state.showAllActive ? ' on' : '');
+  btn.textContent = state.showAllActive ? 'Showing all — tap to filter' : 'Show all snapshots';
+  btn.addEventListener('click', () => { state.showAllActive = !state.showAllActive; renderSnapshots(); });
+  slot.appendChild(btn);
+}
+function clearShowAllButton() {
+  const slot = $('showAllSlot');
+  if (slot) slot.innerHTML = '';
+}
+
 async function renderSnapshots() {
   state.step = 'snap'; setSteps();
   state.snap = null; state.srcHead = null;
@@ -257,18 +276,9 @@ async function renderSnapshots() {
       toast(`Board is busy: ${boardState}`, 'err');
     }
 
-    // "Show all" control — only when the panel permits it. Temporarily reveals every
-    // snapshot for this head; reverts automatically on any navigation away from this list.
-    if (state.panel.allowShowAll) {
-      const bar = document.createElement('div');
-      bar.className = 'showall-bar';
-      const btn = document.createElement('button');
-      btn.className = 'btn sm ghost showall-btn' + (state.showAllActive ? ' on' : '');
-      btn.textContent = state.showAllActive ? 'Showing all — tap to filter' : 'Show all snapshots';
-      btn.addEventListener('click', () => { state.showAllActive = !state.showAllActive; renderSnapshots(); });
-      bar.appendChild(btn);
-      grid.appendChild(bar);
-    }
+    // "Show all" control lives in the footer action bar (centered), not in the snapshot
+    // grid. Only shown when the panel permits it; reverts automatically on navigation away.
+    renderShowAllButton();
 
     if (!snapshots.length) {
       const note = document.createElement('div');
@@ -310,6 +320,7 @@ async function pickSnapshot(s) {
   state.snap = s;
   state.srcHead = null;
   state.showAllActive = false; // clicking into a snapshot reverts the temporary override
+  clearShowAllButton();        // leaving the snapshot step hides the footer toggle
   try {
     const { heads, parsed } = await api(
       `/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`);

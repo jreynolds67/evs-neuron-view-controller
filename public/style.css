@@ -144,6 +144,12 @@ body.strip .group-head { padding: 4px 2px 2px; font-size: 11px; }
   padding: 12px 18px; background: var(--panel); border-top: 1px solid var(--line);
 }
 .actionbar .grow { flex: 1; }
+/* Centered "Show all" slot in the footer. Flanked by two .grow spacers so its button
+   sits in the middle of the action bar. Empty except on the snapshot step. */
+.showall-slot { flex: 0 0 auto; display: flex; align-items: center; }
+.showall-btn.on {
+  background: var(--arm); border-color: var(--arm); color: #1a0c00;
+}
 .footer-clock {
   flex: 0 0 auto; font-variant-numeric: tabular-nums; font-family: var(--mono, monospace);
   font-size: 13px; color: var(--ink-dim); white-space: nowrap; padding-right: 4px;
