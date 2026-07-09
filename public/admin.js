@@ -916,6 +916,7 @@ async function refreshAllHeadNames() {
   cardIds.forEach((id) => cardHeadsCache.delete(id));
 
   let updated = 0, missing = 0, failedCards = [];
+  const missingPanels = new Map(); // panel index -> count, so the summary can name them
   const liveByCard = new Map();
   for (const cardId of cardIds) {
     try {
@@ -926,7 +927,7 @@ async function refreshAllHeadNames() {
     }
   }
 
-  config.panels.forEach((p) => {
+  config.panels.forEach((p, pi) => {
     (p.heads || []).forEach((h) => {
       const live = liveByCard.get(h.cardId);
       if (!live) return; // card poll failed; leave as-is
@@ -936,6 +937,7 @@ async function refreshAllHeadNames() {
         delete h.missing;
       } else {
         h.missing = true; missing++;
+        missingPanels.set(pi, (missingPanels.get(pi) || 0) + 1);
       }
     });
   });
@@ -944,8 +946,20 @@ async function refreshAllHeadNames() {
   // Refresh the global filter section's shown names too, if a card is selected there.
   if ($('hfCard').value) renderGlobalHeadFilters($('hfCard').value);
 
+  // Name the panels that actually hold missing heads, since their warning rows are only
+  // visible when that panel is selected in the master-detail editor.
+  let missingText = '';
+  if (missing) {
+    const names = [...missingPanels.entries()].map(([pi, n]) => {
+      const p = config.panels[pi];
+      return `${p.label || p.ip || `Panel ${pi + 1}`} (${n})`;
+    });
+    missingText = `, ${missing} head${missing === 1 ? '' : 's'} missing on: ${names.join(', ')}`
+      + ' — a full board restore replaces head IDs. Open each panel to see details.';
+  }
+
   stateEl.textContent = `Updated ${updated} name${updated === 1 ? '' : 's'}`
-    + (missing ? `, ${missing} head${missing === 1 ? '' : 's'} missing — see warnings below (a full board restore replaces head IDs)` : '')
+    + missingText
     + (failedCards.length ? `, ${failedCards.length} card${failedCards.length === 1 ? '' : 's'} unreachable` : '')
     + '. Save config to keep.';
 }
