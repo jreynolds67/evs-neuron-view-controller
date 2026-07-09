@@ -395,9 +395,11 @@ app.get('/api/admin/cards/:cardId/snapshots', requireAdmin, async (req, res) => 
       .map(normalizeSnapshotEntry)
       .filter((e) => e.uuid && e.deleted !== true); // hide board-deleted (tombstoned) snapshots
     const metas = await Promise.all(entries.map(async (e) => {
-      if (e.inlineMeta) return { uuid: e.uuid, name: e.name || e.uuid };
-      try { const m = await getSnapshotMeta(card.ip, e.uuid); return { uuid: e.uuid, name: m.name || e.uuid }; }
-      catch { return { uuid: e.uuid, name: e.uuid }; }
+      if (e.inlineMeta) return { uuid: e.uuid, name: e.name || e.uuid, path: e.path || '' };
+      try {
+        const m = await getSnapshotMeta(card.ip, e.uuid);
+        return { uuid: e.uuid, name: m.name || e.uuid, path: m.path || e.path || '' };
+      } catch { return { uuid: e.uuid, name: e.uuid, path: e.path || '' }; }
     }));
     res.json(metas);
   } catch (e) { sendErr(res, e); }
