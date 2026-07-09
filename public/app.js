@@ -30,7 +30,12 @@ function toast(msg, kind = '') {
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(body.error || `Request failed (${res.status})`);
+    err.body = body;        // preserve fields like `ip` for callers
+    err.status = res.status;
+    throw err;
+  }
   return body;
 }
 
@@ -603,7 +608,12 @@ async function boot() {
     $('panelSub').textContent = state.panel.ip;
     renderHeads();
   } catch (e) {
-    $('panelSub').textContent = 'This panel is not registered.';
+    // Show the client IP even when unregistered — the server returns it in the error body,
+    // which is the value to enter in the admin page. Helps troubleshooting.
+    const clientIp = e.body && e.body.ip ? e.body.ip : null;
+    $('panelSub').textContent = clientIp
+      ? `${clientIp} — not registered`
+      : 'This panel is not registered.';
     showEmpty(`${e.message}. Add this panel's IP in the admin page.`);
   }
 }
