@@ -999,23 +999,56 @@ async function renderGlobalHeadFilters(cardId) {
 
       orderedKeys.forEach((gkey) => {
         const folderLabel = gkey === '\uffffUngrouped' ? 'Ungrouped' : gkey;
+        const folderSnaps = groups.get(gkey);
+
         const fh = document.createElement('div');
         fh.className = 'snap-folder-head';
-        fh.textContent = folderLabel;
+        fh.innerHTML = `<label class="sfh-all"><input type="checkbox"><span></span></label>`;
+        fh.querySelector('span').textContent = folderLabel;
+        const folderCb = fh.querySelector('input');
         list.appendChild(fh);
 
-        groups.get(gkey).forEach((s) => {
+        // Per-snapshot checkboxes, tracked so the header box can drive/reflect them.
+        const snapBoxes = [];
+        const refreshFolderBox = () => {
+          const on = snapBoxes.filter((b) => b.checked).length;
+          folderCb.checked = on === snapBoxes.length && on > 0;
+          folderCb.indeterminate = on > 0 && on < snapBoxes.length;
+        };
+
+        folderSnaps.forEach((s) => {
           const checked = (config.headFilters[key] || []).includes(s.uuid);
           const lab = document.createElement('label');
           lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
-          lab.querySelector('input').addEventListener('change', (e) => {
+          const cb = lab.querySelector('input');
+          cb.dataset.uuid = s.uuid;
+          snapBoxes.push(cb);
+          cb.addEventListener('change', (e) => {
             let arr = config.headFilters[key] ? [...config.headFilters[key]] : [];
             if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
             if (arr.length) config.headFilters[key] = arr; else delete config.headFilters[key];
             sum.querySelector('.hf-count').textContent = `— ${countText()}`;
+            refreshFolderBox();
           });
           list.appendChild(lab);
         });
+
+        // Header checkbox: select/deselect every snapshot in this folder at once.
+        folderCb.addEventListener('change', (e) => {
+          const want = e.target.checked;
+          let arr = config.headFilters[key] ? [...config.headFilters[key]] : [];
+          folderSnaps.forEach((s) => {
+            const has = arr.includes(s.uuid);
+            if (want && !has) arr.push(s.uuid);
+            else if (!want && has) arr = arr.filter(u => u !== s.uuid);
+          });
+          if (arr.length) config.headFilters[key] = arr; else delete config.headFilters[key];
+          snapBoxes.forEach((b) => { b.checked = want; });
+          sum.querySelector('.hf-count').textContent = `— ${countText()}`;
+          refreshFolderBox();
+        });
+
+        refreshFolderBox();
       });
       det.appendChild(list);
       host.appendChild(det);
