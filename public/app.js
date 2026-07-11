@@ -633,7 +633,13 @@ function closeFullscreen() {
   stopFullscreenPolling();
   $('fsOverlay').classList.remove('show');
   fsState = null;
-  if (state.step === 'head') startPreviewPolling(); // resume grid preview updates
+  if (state.step === 'head') {
+    // The grid was frozen while the editor was open, so its previews may be stale (e.g. a
+    // recall from another panel landed meanwhile). Refresh now rather than waiting a poll
+    // cycle, then resume polling.
+    refreshVisiblePreviews();
+    startPreviewPolling();
+  }
 }
 
 function groupByUuid(uuid) {
