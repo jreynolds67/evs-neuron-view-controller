@@ -547,6 +547,7 @@ function connectControlWs() {
 // input group on the live board.
 
 let fsState = null; // { head, widgets, groups }
+let fsPollTimer = null;
 
 async function openFullscreen(head) {
   stopPreviewPolling(); // the editor covers the heads grid; don't poll behind it
@@ -562,15 +563,52 @@ async function openFullscreen(head) {
     ]);
     fsState = { head, widgets: widgets || [], groups: groups || [] };
     renderFullscreen();
+    startFullscreenPolling(); // keep the enlarged view live to recalls from other panels
   } catch (e) {
     $('fsBody').innerHTML = `<div class="preview-note err" style="padding:40px">${e.message}</div>`;
   }
 }
 
+// True while the operator is typing a new input number into a window. Used to skip a live
+// refresh so we never yank the field they're editing. Their edit commits on Enter as normal;
+// the next poll cycle then reflects reality.
+function fsIsEditing() {
+  return !!$('fsOverlay').querySelector('.fs-window.editing');
+}
+
+// Poll the enlarged view so a snapshot recalled from ANOTHER panel redraws it. A cycle that
+// lands while the operator is mid-edit is skipped entirely (see fsIsEditing). Because no
+// input is open when we DO redraw, a full renderFullscreen() is safe here.
+const FS_POLL_MS = 5000;
+function startFullscreenPolling() {
+  stopFullscreenPolling();
+  fsPollTimer = setInterval(async () => {
+    if (!fsState) { stopFullscreenPolling(); return; }
+    if (document.hidden) return;   // don't poll a backgrounded tab
+    if (fsIsEditing()) return;     // don't disturb an in-progress edit; retry next cycle
+    try {
+      const head = fsState.head;
+      const [{ widgets }, { groups }] = await Promise.all([
+        api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
+        api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
+      ]);
+      // Guard against races: the view may have closed, or an edit may have begun, during the
+      // fetch. Bail rather than redraw over either.
+      if (!fsState || fsState.head !== head || fsIsEditing()) return;
+      fsState = { head, widgets: widgets || [], groups: groups || [] };
+      renderFullscreen();
+    } catch { /* transient poll failure — keep the current view, try again next cycle */ }
+  }, FS_POLL_MS);
+}
+function stopFullscreenPolling() {
+  if (fsPollTimer) { clearInterval(fsPollTimer); fsPollTimer = null; }
+}
+
 function closeFullscreen() {
+  stopFullscreenPolling();
   $('fsOverlay').classList.remove('show');
   fsState = null;
-  if (state.step === 'head') startPreviewPolling(); // resume live preview updates
+  if (state.step === 'head') startPreviewPolling(); // resume grid preview updates
 }
 
 function groupByUuid(uuid) {
