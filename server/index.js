@@ -31,6 +31,7 @@ import { createTtlCache } from './cache.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
+const PRIVATE_DIR = join(__dirname, '..', 'private');
 const PORT = process.env.PORT || 8080;
 
 const app = express();
@@ -39,12 +40,15 @@ const app = express();
 // config save with an opaque 413. Payloads are still small relative to this ceiling.
 app.use(express.json({ limit: '5mb' }));
 
-// Gate the admin page itself: an unauthenticated load is redirected to the login page.
-// This must run BEFORE express.static, which would otherwise serve admin.html to anyone.
-// API calls are gated separately by requireAdmin; this is only the HTML shell.
-app.get(['/admin', '/admin.html'], (req, res, next) => {
-  if (touchSession(sessionIdFromReq(req))) return next(); // valid session → let static serve it
-  return res.redirect(302, '/login.html');
+// Serve the admin HTML shell ONLY through this authenticated route. admin.html lives in
+// PRIVATE_DIR, outside the static root, so there is no static path for express.static to
+// resolve — closing off URL-normalization bypasses (/%61dmin.html, /./admin.html, etc.).
+// A valid session serves the file; otherwise redirect to login. (admin.js and the rest
+// stay static; every admin API is separately session-gated by requireAdmin.)
+app.get(['/admin', '/admin.html'], (req, res) => {
+  if (!touchSession(sessionIdFromReq(req))) return res.redirect(302, '/login.html');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(join(PRIVATE_DIR, 'admin.html'));
 });
 
 // No-cache on static assets: these are operator panels that must pick up a redeploy on
@@ -243,10 +247,7 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
   if (!r) return;
   const { card } = r;
   try {
-    const [modelEntry, liveHeads] = await Promise.all([
-      getSnapshotModelCached(card.ip, req.params.snapUuid),
-      getHeads(card.ip).catch(() => []),
-    ]);
+    const modelEntry = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     // Extractor already returns only named heads (unnamed entries aren't selectable).
     let heads = extractSnapshotHeads(modelEntry.model);
 
@@ -275,15 +276,12 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
       });
     }
 
-    // Light backstop: if the snapshot's head UUIDs line up with live board heads, keep
-    // the intersection. If they don't line up at all (e.g. an imported snapshot), keep
-    // the named extraction as-is rather than emptying the list.
-    const liveUuids = new Set((liveHeads || []).map((h) => h.uuid));
-    if (liveUuids.size) {
-      const byUuid = heads.filter((h) => liveUuids.has(h.uuid));
-      if (byUuid.length) heads = byUuid;
-    }
-
+    // Source heads come straight from the snapshot's own model — a partial restore reads the
+    // source layout FROM THE SNAPSHOT, never from the live board, so the live heads are
+    // irrelevant to what's recallable. (An earlier "intersect with live heads" backstop hid
+    // valid source heads whenever a snapshot was recalled on the same card after a head was
+    // rebuilt — the strict name/shape check in extractSnapshotHeads is the real guard against
+    // junk, so no live-board filter is needed.)
     res.json({ heads, parsed: heads.length > 0 });
   } catch (e) { sendErr(res, e); }
 });
@@ -295,8 +293,9 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
 // count. TTL is under the poll interval so a manual navigation still gets near-fresh data.
 const PREVIEW_TTL_MS = 3500;
 const GROUPS_TTL_MS = 3500;
-const previewCache = createTtlCache(PREVIEW_TTL_MS);
-const groupsCache = createTtlCache(GROUPS_TTL_MS);
+const NEG_TTL_MS = 5000; // brief failure caching so a down board isn't re-hit every poll
+const previewCache = createTtlCache(PREVIEW_TTL_MS, { negativeTtlMs: NEG_TTL_MS });
+const groupsCache = createTtlCache(GROUPS_TTL_MS, { negativeTtlMs: NEG_TTL_MS });
 setInterval(() => { previewCache.prune(30000); groupsCache.prune(30000); }, 30000).unref?.();
 
 app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => {
@@ -441,16 +440,57 @@ async function getAdminCred() {
   return { user: a.user || '', passwordHash: a.passwordHash || '' };
 }
 
+// Per-IP login throttle. scrypt is intentionally expensive, so even off the event loop we
+// don't want an unbounded attempt rate. Track recent failures per client IP: after a
+// threshold within the window, reject fast (before hashing) with a short cooldown. Cleared
+// on success. This is a brute-force/self-DoS guard, not a substitute for the strong hash.
+const loginAttempts = new Map(); // ip -> { count, first, blockedUntil }
+const LOGIN_MAX = 5;             // failures allowed within the window
+const LOGIN_WINDOW_MS = 60000;   // rolling window
+const LOGIN_BLOCK_MS = 60000;    // cooldown once tripped
+function loginThrottle(ip) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip);
+  if (!rec) return { blocked: false };
+  if (rec.blockedUntil && now < rec.blockedUntil) return { blocked: true, retryMs: rec.blockedUntil - now };
+  if (rec.first && now - rec.first > LOGIN_WINDOW_MS) { loginAttempts.delete(ip); return { blocked: false }; }
+  return { blocked: false };
+}
+function noteLoginFailure(ip) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0, first: now, blockedUntil: 0 };
+  if (now - rec.first > LOGIN_WINDOW_MS) { rec.count = 0; rec.first = now; rec.blockedUntil = 0; }
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX) rec.blockedUntil = now + LOGIN_BLOCK_MS;
+  loginAttempts.set(ip, rec);
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of loginAttempts) {
+    if ((!rec.blockedUntil || now >= rec.blockedUntil) && now - rec.first > LOGIN_WINDOW_MS) loginAttempts.delete(ip);
+  }
+}, 5 * 60 * 1000).unref?.();
+
 app.post('/api/admin/login', async (req, res) => {
+  const ip = clientIp(req);
+  const throttled = loginThrottle(ip);
+  if (throttled.blocked) {
+    return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(throttled.retryMs / 1000)}s.` });
+  }
   const { user, password } = req.body || {};
   const cred = await getAdminCred();
   if (!cred.user || !cred.passwordHash) {
     return res.status(503).json({ error: 'No admin credential is configured on the server.' });
   }
   const userOk = typeof user === 'string' && user === cred.user;
-  const passOk = verifyPassword(password || '', cred.passwordHash);
-  // Check both regardless of the username result to avoid leaking which field was wrong.
-  if (!userOk || !passOk) return res.status(401).json({ error: 'Invalid username or password.' });
+  // Always run verification (now async / off-loop) even if the user is wrong, so timing
+  // doesn't leak which field failed.
+  const passOk = await verifyPassword(password || '', cred.passwordHash);
+  if (!userOk || !passOk) {
+    noteLoginFailure(ip);
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+  loginAttempts.delete(ip); // success clears the counter
   const id = createSession(cred.user);
   setSessionCookie(res, id);
   res.json({ ok: true });
@@ -675,82 +715,15 @@ app.get('/api/admin/cards/:cardId/storage', requireAdmin, async (req, res) => {
     res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });
   }
 });
-// Panels connect to our server (ws://<container>/ws?card=<id>). We open one
-// upstream connection per distinct board and relay messages to subscribers.
-// This keeps board IPs hidden and avoids each panel hammering the board directly.
+// Server-side WebSocket. Only the "control" channel is used: panels open it on load and
+// hold it for the session so the server can push small JSON messages (currently just
+// { type:'reload' } after a config save). The former per-card board fan-out was removed —
+// the Neuron boards don't expose a consumable WS endpoint (the handshake returns an HTTP
+// page, not a socket), so live preview updates are done by client polling + the server
+// read cache instead.
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
-
-const upstream = new Map(); // cardId -> { ws, subscribers:Set }
-
-// Board WebSocket transport. Defaults to wss (boards using HTTPS also secure the WS)
-// with self-signed certs accepted, matching the board API client. Override with:
-//   BOARD_WS_SCHEME  : "wss" (default) or "ws"
-//   BOARD_WS_PORT    : optional explicit port
-const WS_SCHEME = (process.env.BOARD_WS_SCHEME || (process.env.BOARD_SCHEME === 'http' ? 'ws' : 'wss')).toLowerCase();
-const WS_PORT = process.env.BOARD_WS_PORT || '';
-const WS_REJECT_UNAUTHORIZED = String(process.env.BOARD_TLS_REJECT_UNAUTHORIZED || 'false') === 'true';
-
-function boardWsUrl(ip) {
-  const suffix = WS_PORT ? `:${WS_PORT}` : '';
-  return `${WS_SCHEME}://${ip}${suffix}`;
-}
-
-function ensureUpstream(cardId, boardIp) {
-  let entry = upstream.get(cardId);
-  // Reuse an existing socket that is OPEN *or* still CONNECTING — otherwise a second
-  // subscriber arriving mid-connect would spawn a duplicate upstream, and both would relay
-  // the same board messages (panels get everything twice).
-  if (entry && entry.ws &&
-      (entry.ws.readyState === WebSocket.OPEN || entry.ws.readyState === WebSocket.CONNECTING)) {
-    return entry;
-  }
-  if (!entry) { entry = { ws: null, subscribers: new Set(), boardIp, reconnectTimer: null }; upstream.set(cardId, entry); }
-  entry.boardIp = boardIp;
-
-  // For wss to a self-signed board, disable cert rejection for THIS socket only.
-  const wsOpts = WS_SCHEME === 'wss' ? { rejectUnauthorized: WS_REJECT_UNAUTHORIZED } : {};
-  const ws = new WebSocket(boardWsUrl(boardIp), wsOpts);
-  entry.ws = ws;
-  ws.on('message', (data) => {
-    for (const sub of entry.subscribers) {
-      if (sub.readyState === WebSocket.OPEN) sub.send(data.toString());
-    }
-  });
-  const scheduleReconnect = () => {
-    entry.ws = null;
-    if (entry.subscribers.size === 0) return;
-    if (entry.reconnectTimer) return;
-    // Exponential backoff with a cap, and a give-up ceiling. A board WS that always fails
-    // (e.g. no reachable WS endpoint) must not produce an endless error storm against the
-    // boards — back off 3s, 6s, 12s… up to 60s, then stop trying for this session.
-    entry.failCount = (entry.failCount || 0) + 1;
-    if (entry.failCount > 8) {
-      if (!entry.gaveUp) {
-        entry.gaveUp = true;
-        console.warn(`[upstream] giving up on board WS card=${cardId} after ${entry.failCount} failures`);
-      }
-      return;
-    }
-    const delay = Math.min(60000, 3000 * Math.pow(2, entry.failCount - 1));
-    entry.reconnectTimer = setTimeout(() => {
-      entry.reconnectTimer = null;
-      if (entry.subscribers.size > 0) ensureUpstream(cardId, entry.boardIp);
-    }, delay);
-  };
-  ws.on('open', () => {
-    entry.failCount = 0; entry.gaveUp = false; entry.errLogged = false;
-    console.log(`[upstream] board WS open card=${cardId} ${boardWsUrl(boardIp)}`);
-  });
-  ws.on('close', () => { scheduleReconnect(); });
-  ws.on('error', (e) => {
-    // Log only the first error per card to avoid flooding the container log.
-    if (!entry.errLogged) { entry.errLogged = true; console.warn(`[upstream] board WS error card=${cardId}: ${e.message}`); }
-    try { ws.close(); } catch {}
-  });
-  return entry;
-}
 
 // Panels open a "control" WS on load (ws?control=1) and hold it for the whole session.
 // The server broadcasts small JSON messages down it — currently just { type:'reload' }
@@ -780,35 +753,18 @@ const controlKeepalive = setInterval(() => {
 }, 30000);
 controlKeepalive.unref?.();
 
-wss.on('connection', async (client, req) => {
+wss.on('connection', (client, req) => {
   const url = new URL(req.url, 'http://localhost');
-
-  // Control channel: every panel joins this on boot. No card, just broadcast target.
-  if (url.searchParams.get('control') === '1') {
-    client.isAlive = true;
-    client.on('pong', () => { client.isAlive = true; });
-    controlClients.add(client);
-    console.log(`[control] client connected (${controlClients.size} total)`);
-    client.on('close', () => {
-      controlClients.delete(client);
-      console.log(`[control] client disconnected (${controlClients.size} total)`);
-    });
-    return;
-  }
-
-  const cardId = url.searchParams.get('card');
-  const config = await loadConfig();
-  const card = getCardById(config, cardId);
-  if (!card) { client.close(1008, 'Unknown card'); return; }
-
-  const entry = ensureUpstream(cardId, card.ip);
-  entry.subscribers.add(client);
+  // Only the control channel is supported. Anything else (e.g. a stale ?card= client) is
+  // closed rather than served — there is no board fan-out anymore.
+  if (url.searchParams.get('control') !== '1') { client.close(1008, 'Unsupported channel'); return; }
+  client.isAlive = true;
+  client.on('pong', () => { client.isAlive = true; });
+  controlClients.add(client);
+  console.log(`[control] client connected (${controlClients.size} total)`);
   client.on('close', () => {
-    entry.subscribers.delete(client);
-    if (entry.subscribers.size === 0) {
-      if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
-      if (entry.ws) { try { entry.ws.close(); } catch {} }
-    }
+    controlClients.delete(client);
+    console.log(`[control] client disconnected (${controlClients.size} total)`);
   });
 });
 

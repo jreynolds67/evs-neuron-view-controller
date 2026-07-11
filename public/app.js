@@ -249,7 +249,7 @@ async function renderHeads() {
     card.querySelector('.k').textContent = h.label || 'Head';
     if (state.showUuids) card.querySelector('.uuid').textContent = h.headUuid;
     else card.querySelector('.uuid').remove();
-    card.addEventListener('click', () => { state.head = h; state.showAllActive = false; stopPreviewPolling(); connectWs(h.cardId); renderSnapshots(); });
+    card.addEventListener('click', () => { state.head = h; state.showAllActive = false; stopPreviewPolling(); renderSnapshots(); });
 
     // Fullscreen input-group editor is 1920x1080 only — not on the strip.
     const expand = card.querySelector('.expand-btn');
@@ -484,16 +484,10 @@ function restart() {
   renderHeads();
 }
 
-// ---- Live status (WebSocket) ----------------------------------------------
+// ---- Live status ----------------------------------------------------------
 
-let ws = null;                 // single-card socket used from the snapshot step onward
 let previewPollTimer = null;   // interval that refreshes head previews on the heads view
 let previewRefreshTimer = null;
-
-// The per-card board WebSocket is not used: the Neuron boards don't expose a WS endpoint we
-// can consume (handshake returns HTTP 200, not a socket), and previews are kept current by
-// polling instead. Kept as a no-op so call sites don't need to change.
-function connectWs(_cardId) { /* intentionally does nothing */ }
 
 // Keep head previews current while the heads view is showing. The Neuron boards don't emit
 // a usable WebSocket event on a partial restore, so instead of relying on a live push we

@@ -13,6 +13,7 @@ RUN npm install --omit=dev
 # App source
 COPY server ./server
 COPY public ./public
+COPY private ./private
 
 # Config lives on a mounted volume so it survives redeploys
 ENV CONFIG_PATH=/data/config.json

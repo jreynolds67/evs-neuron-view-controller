@@ -9,7 +9,15 @@
 //   node -e "import('./server/auth.js').then(m=>console.log(m.hashPassword(process.argv[1])))" 'yourpassword'
 // (or use the printHash helper at the bottom).
 
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scryptSync, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+
+// Async scrypt for the login path: scrypt is deliberately CPU-heavy (tens of ms), and the
+// SYNC variant blocks Node's single shared event loop — so a burst of login attempts would
+// stall restore requests for every operator facility-wide. The async form runs on libuv's
+// threadpool instead, keeping the loop free. hashPassword (a one-off CLI/admin action) can
+// stay sync.
+const scryptAsync = promisify(scryptCb);
 
 const SESSION_COOKIE = 'nmv_admin';
 const IDLE_MS = 30 * 60 * 1000; // 30 minutes of inactivity ends the session
@@ -25,8 +33,9 @@ export function hashPassword(plain) {
   return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
-// Verify a plaintext attempt against a stored `scrypt$salt$hash` string. Constant-time.
-export function verifyPassword(plain, stored) {
+// Verify a plaintext attempt against a stored `scrypt$salt$hash` string. Constant-time,
+// and async so the hash computation runs off the event loop.
+export async function verifyPassword(plain, stored) {
   if (typeof stored !== 'string') return false;
   const parts = stored.split('$');
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
@@ -35,7 +44,7 @@ export function verifyPassword(plain, stored) {
   catch { return false; }
   if (expected.length !== 32) return false;
   let actual;
-  try { actual = scryptSync(String(plain), salt, 32); } catch { return false; }
+  try { actual = await scryptAsync(String(plain), salt, 32); } catch { return false; }
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 

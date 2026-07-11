@@ -198,6 +198,20 @@ async function runBackupInternal() {
       }
     }
 
+    // Include a dated copy of the app config in every run, so a backup set is a COMPLETE
+    // restore point (board snapshots + all panel/head/filter definitions), not just board
+    // data. The admin password hash is stripped — a backup may be copied elsewhere and
+    // shouldn't carry the credential.
+    try {
+      const { admin, ...safeConfig } = config;
+      const cfgBuf = Buffer.from(JSON.stringify(safeConfig, null, 2), 'utf8');
+      const cfgFile = `${date}__config.json`;
+      await writeAtomic(join(BACKUP_DIR, cfgFile), cfgBuf);
+      written.push({ file: cfgFile, bytes: cfgBuf.length });
+    } catch (e) {
+      console.log(`[backup] config copy step failed: ${e.message}`);
+    }
+
     status.lastRun = Date.now();
     if (written.length) status.lastError = null;
     else if (!status.lastError) status.lastError = 'Export produced no valid files';

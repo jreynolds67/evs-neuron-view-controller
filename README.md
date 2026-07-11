@@ -325,7 +325,7 @@ There is no build step — the frontend is plain HTML/CSS/JS served straight fro
 
 ```
 server/
-  index.js      Express app, panel + admin APIs, WebSocket fan-out, caching
+  index.js      Express app, panel + admin APIs, control WebSocket, caching
   board.js      Neuron board client; partials-only restore lives here
   config.js     JSON-on-volume config store (cached, atomic writes)
   auth.js       Admin login: scrypt hashing, sessions, cookies
@@ -337,10 +337,12 @@ server/
 public/
   index.html    Operator touch UI
   app.js          ""      flow logic, live-preview polling, enlarged editor
-  admin.html    Admin page
-  admin.js        ""     logic (panels, heads, groups, backups, storage)
+  admin.js      Admin page logic (panels, heads, groups, backups, storage)
   login.html    Admin login screen
   style.css     Shared operator styling (dark broadcast-control aesthetic)
+private/
+  admin.html    Admin page shell — served only via the authenticated route, not
+                as a static file, so there's no static path to bypass the login gate
 config/
   config.example.json   Reference config shape
 Dockerfile
