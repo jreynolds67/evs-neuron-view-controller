@@ -33,7 +33,10 @@ const PUBLIC_DIR = join(__dirname, '..', 'public');
 const PORT = process.env.PORT || 8080;
 
 const app = express();
-app.use(express.json({ limit: '256kb' }));
+// 5 MB: headFilters can grow large (per-head lists of 36-char UUIDs across 12 cards ×
+// ~20 heads × many allowed snapshots). The old 256 KB limit could reject a legitimate
+// config save with an opaque 413. Payloads are still small relative to this ceiling.
+app.use(express.json({ limit: '5mb' }));
 
 // Gate the admin page itself: an unauthenticated load is redirected to the login page.
 // This must run BEFORE express.static, which would otherwise serve admin.html to anyone.
@@ -412,6 +415,16 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   next.settings = { showUuids: true, ...(next.settings || {}) };
   if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
   if (!Array.isArray(next.panelGroups)) next.panelGroups = [];
+
+  // Reject duplicate card IDs and panel IPs. getCardById/getPanelByIp return the first
+  // match, so a duplicate silently produces heads/filters that half-work and are miserable
+  // to debug. Fail the save with a clear message instead.
+  const cardIds = next.cards.map((c) => (c.id || '').trim()).filter(Boolean);
+  const dupCard = cardIds.find((id, i) => cardIds.indexOf(id) !== i);
+  if (dupCard) return res.status(400).json({ error: `Duplicate card ID: "${dupCard}". Card IDs must be unique.` });
+  const panelIps = next.panels.map((p) => (p.ip || '').trim()).filter(Boolean);
+  const dupIp = panelIps.find((ip, i) => panelIps.indexOf(ip) !== i);
+  if (dupIp) return res.status(400).json({ error: `Duplicate panel IP: "${dupIp}". Panel IPs must be unique.` });
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
 
   // These sub-objects are owned by their own dedicated endpoints, not the main config page:

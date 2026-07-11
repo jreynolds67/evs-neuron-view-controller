@@ -15,6 +15,15 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const grid = $('grid');
 
+// Stale-response guard. Each navigation (step change, Back, restart, picking a head or
+// snapshot) bumps navSeq. An async render captures the value before its await and bails if
+// navSeq has since moved — meaning the operator navigated away while a slow board fetch was
+// in flight. Without this, a response arriving after Back reads a now-null state.snap/head
+// and throws, wedging the UI. bumpNav() returns the new token for the caller to capture.
+let navSeq = 0;
+function bumpNav() { return ++navSeq; }
+function navStale(token) { return token !== navSeq; }
+
 // Natural alphanumeric sort so "2 Boxes" < "9 Boxes" < "10 Boxes" (not lexical).
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 const byName = (a, b) => collator.compare(a.name || '', b.name || '');
@@ -180,6 +189,7 @@ function showEmpty(msg) {
 // ---- Steps ----------------------------------------------------------------
 
 async function renderHeads() {
+  bumpNav();
   state.step = 'head'; setSteps();
   state.head = null; state.snap = null; state.srcHead = null;
   state.showAllActive = false; // heads view always starts from the filtered state
@@ -267,6 +277,7 @@ function clearShowAllButton() {
 }
 
 async function renderSnapshots() {
+  const token = bumpNav();
   state.step = 'snap'; setSteps();
   state.snap = null; state.srcHead = null;
   $('stageTitle').textContent = 'Select a snapshot';
@@ -276,6 +287,7 @@ async function renderSnapshots() {
     const qs = state.showAllActive ? '?showAll=1' : '';
     const { snapshots, state: boardState } = await api(
       `/api/panel/cards/${state.head.cardId}/heads/${state.head.headUuid}/snapshots${qs}`);
+    if (navStale(token)) return; // operator navigated away during the fetch
     grid.innerHTML = '';
     if (boardState && boardState !== 'idle') {
       toast(`Board is busy: ${boardState}`, 'err');
@@ -322,6 +334,7 @@ async function renderSnapshots() {
 
 // After choosing a snapshot, resolve which source head inside it maps to the target.
 async function pickSnapshot(s) {
+  const token = bumpNav();
   state.snap = s;
   state.srcHead = null;
   state.showAllActive = false; // clicking into a snapshot reverts the temporary override
@@ -329,6 +342,7 @@ async function pickSnapshot(s) {
   try {
     const { heads, parsed } = await api(
       `/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`);
+    if (navStale(token)) return; // operator tapped Back (etc.) during the fetch
 
     if (parsed && heads.length >= 1) {
       // Always show the Source step, even for a single option — the operator confirms
@@ -429,6 +443,7 @@ async function fire() {
 // ---- Navigation -----------------------------------------------------------
 
 function back() {
+  bumpNav(); // invalidate any in-flight fetch from the step we're leaving
   state.showAllActive = false; // any back-navigation reverts the temporary override
   if (state.step === 'snap') return renderHeads();
   if (state.step === 'source') return renderSnapshots();

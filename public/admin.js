@@ -29,6 +29,14 @@ async function logout() {
   window.location.href = '/login.html';
 }
 function setLoadState(msg) { const el = $('loadState'); if (el) el.textContent = msg; }
+// Escape board- and user-sourced strings before putting them in innerHTML. Board strings
+// (snapshot/head names, log detail) and user labels can contain <, >, &, or quotes that
+// would otherwise break markup or render wrong (e.g. a snapshot named `A & B <x>`).
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function toast(msg, kind = '') {
   const t = $('toast'); t.textContent = msg; t.className = `toast show ${kind}`;
   clearTimeout(toast._t); toast._t = setTimeout(() => t.className = 'toast', 3000);
@@ -74,9 +82,9 @@ function renderCards() {
   config.cards.forEach((c, i) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><input value="${c.id || ''}" data-i="${i}" data-f="id"></td>
-      <td><input value="${c.label || ''}" data-i="${i}" data-f="label"></td>
-      <td><input value="${c.ip || ''}" data-i="${i}" data-f="ip" placeholder="10.10.60.x"></td>
+      <td><input value="${esc(c.id || '')}" data-i="${i}" data-f="id"></td>
+      <td><input value="${esc(c.label || '')}" data-i="${i}" data-f="label"></td>
+      <td><input value="${esc(c.ip || '')}" data-i="${i}" data-f="ip" placeholder="10.10.60.x"></td>
       <td><button class="btn sm del" data-del="${i}">Remove</button></td>`;
     tb.appendChild(tr);
   });
@@ -435,9 +443,9 @@ function renderPanelDetail(pi) {
   box.innerHTML = `
     <div class="inline" style="gap:12px">
       <div style="flex:1"><label class="muted">Panel IP</label>
-        <input value="${p.ip || ''}" data-pi="${pi}" data-f="ip" placeholder="10.10.61.11"></div>
+        <input value="${esc(p.ip || '')}" data-pi="${pi}" data-f="ip" placeholder="10.10.61.11"></div>
       <div style="flex:1"><label class="muted">Label</label>
-        <input value="${p.label || ''}" data-pi="${pi}" data-f="label" placeholder="PCR 101 Panel"></div>
+        <input value="${esc(p.label || '')}" data-pi="${pi}" data-f="label" placeholder="PCR 101 Panel"></div>
       <div style="width:200px"><label class="muted">Layout</label>
         <select data-pi="${pi}" data-f="layout">
           <option value="1080"${p.layout === '1080' ? ' selected' : ''}>1920 × 1080</option>
@@ -546,7 +554,7 @@ function renderHeadList(pi) {
       <div class="ah-top">
         <span class="ah-drag" title="Drag to reorder">⋮⋮</span>
         <span class="order-pos">${i + 1}</span>
-        <input class="ah-label" placeholder="${h.boardName || 'Display label'}" value="${h.label || ''}">
+        <input class="ah-label" placeholder="${esc(h.boardName || 'Display label')}" value="${esc(h.label || '')}">
         <span class="ah-source muted"></span>
         <label class="ah-all" title="Show all snapshots on this panel, ignoring the global head filter">
           <input type="checkbox" class="ah-all-cb" ${h.showAllSnapshots ? 'checked' : ''}>
@@ -828,7 +836,7 @@ async function openHeadPicker(pi) {
   const addBtn = picker.querySelector('.hp-add');
 
   cardSel.innerHTML = '<option value="">— select —</option>' +
-    config.cards.filter(c => c.id).map(c => `<option value="${c.id}">${c.label || c.id}</option>`).join('');
+    config.cards.filter(c => c.id).map(c => `<option value="${esc(c.id)}">${esc(c.label || c.id)}</option>`).join('');
 
   cardSel.addEventListener('change', async () => {
     const cardId = cardSel.value;
@@ -842,9 +850,9 @@ async function openHeadPicker(pi) {
       const avail = heads.filter(h => !taken.has(h.uuid));
       if (!avail.length) { headSel.innerHTML = '<option value="">All heads already added</option>'; return; }
       headSel.innerHTML = '<option value="">— select —</option>' +
-        avail.map(h => `<option value="${h.uuid}">${h.name || h.uuid}</option>`).join('');
+        avail.map(h => `<option value="${esc(h.uuid)}">${esc(h.name || h.uuid)}</option>`).join('');
     } catch (e) {
-      headSel.innerHTML = `<option value="">Error: ${e.message}</option>`;
+      headSel.innerHTML = `<option value="">Error: ${esc(e.message)}</option>`;
     }
   });
 
@@ -995,7 +1003,7 @@ function renderHeadFilterCards() {
   const sel = $('hfCard');
   const cur = sel.value;
   sel.innerHTML = '<option value="">— select a card —</option>' +
-    config.cards.filter(c => c.id).map(c => `<option value="${c.id}">${c.label || c.id}</option>`).join('');
+    config.cards.filter(c => c.id).map(c => `<option value="${esc(c.id)}">${esc(c.label || c.id)}</option>`).join('');
   if (cur) sel.value = cur;
 }
 
@@ -1026,7 +1034,7 @@ async function renderGlobalHeadFilters(cardId) {
         const arr = config.headFilters[key];
         return arr && arr.length ? `${arr.length} allowed` : 'all allowed';
       };
-      sum.innerHTML = `<span class="hf-name">${h.name || h.uuid}</span> <span class="hf-count muted"></span>`;
+      sum.innerHTML = `<span class="hf-name">${esc(h.name || h.uuid)}</span> <span class="hf-count muted"></span>`;
       sum.querySelector('.hf-count').textContent = `— ${countText()}`;
       det.appendChild(sum);
 
@@ -1064,7 +1072,7 @@ async function renderGlobalHeadFilters(cardId) {
         folderSnaps.forEach((s) => {
           const checked = (config.headFilters[key] || []).includes(s.uuid);
           const lab = document.createElement('label');
-          lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${s.name}</span>`;
+          lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${esc(s.name)}</span>`;
           const cb = lab.querySelector('input');
           cb.dataset.uuid = s.uuid;
           snapBoxes.push(cb);
@@ -1180,11 +1188,11 @@ async function refreshLog(reset = false) {
       const statusColor = e.ok ? 'var(--fire)' : 'var(--danger)';
       tr.innerHTML = `
         <td class="mono" style="font-size:12px">${fmtTime(e.ts)}</td>
-        <td class="mono">${e.method || ''}</td>
-        <td class="mono" style="font-size:12px">${(e.ip || '') + (e.path || '')}</td>
-        <td class="mono" style="color:${statusColor}">${statusTxt}</td>
+        <td class="mono">${esc(e.method || '')}</td>
+        <td class="mono" style="font-size:12px">${esc((e.ip || '') + (e.path || ''))}</td>
+        <td class="mono" style="color:${statusColor}">${esc(statusTxt)}</td>
         <td class="mono">${e.durationMs ?? ''}</td>
-        <td style="font-size:12px;color:var(--ink-dim)">${(e.detail || e.error || '').toString().slice(0,160)}</td>`;
+        <td style="font-size:12px;color:var(--ink-dim)">${esc((e.detail || e.error || '').toString().slice(0,160))}</td>`;
       tb.prepend(tr); // newest on top
     });
     // Trim DOM to 200 rows
@@ -1311,7 +1319,7 @@ async function refreshBackup() {
     $('bkRetention').value = c.retentionDays || 30;
     // Populate board dropdown from current cards.
     $('bkCard').innerHTML = '<option value="">— select —</option>' +
-      config.cards.filter(x => x.id).map(x => `<option value="${x.id}"${x.id === c.cardId ? ' selected' : ''}>${x.label || x.id}</option>`).join('');
+      config.cards.filter(x => x.id).map(x => `<option value="${esc(x.id)}"${x.id === c.cardId ? ' selected' : ''}>${esc(x.label || x.id)}</option>`).join('');
     renderBackupFiles(data.files || []);
     const st = data.status || {};
     if (st.lastRun) $('bkState').textContent = `Last backup ${new Date(st.lastRun).toLocaleString()}` + (st.lastError ? ` · ${st.lastError}` : '');
@@ -1323,7 +1331,7 @@ function renderBackupFiles(files) {
   if (!files.length) { tb.innerHTML = '<tr><td colspan="4" class="muted">No backups yet.</td></tr>'; return; }
   files.forEach((f) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="mono" style="font-size:12px">${f.file}</td>
+    tr.innerHTML = `<td class="mono" style="font-size:12px">${esc(f.file)}</td>
       <td>${fmtBytes(f.bytes)}</td>
       <td>${new Date(f.mtime).toLocaleString()}</td>
       <td class="inline" style="gap:6px">
