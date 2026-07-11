@@ -1,7 +1,7 @@
 {
   "admin": {
-    "user": "operator",
-    "passwordHash": "scrypt$5609e24f5f18360d7a6bde922a22a06a$3275084d2f979c0840a3421d20876cc1646376fc8393accde06d12758eaf5698"
+    "user": "admin",
+    "passwordHash": "scrypt$240632c99ebf709d6baca9c189611b67$8299b40a45b86e37e8d3e2288ad4336357b242662e097bf0032c0dc3a4638a99"
   },
   "cards": [
     { "id": "mv1", "label": "MV Card 1", "ip": "10.10.60.21" },
