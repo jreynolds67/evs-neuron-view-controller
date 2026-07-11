@@ -87,7 +87,9 @@
       color-mix(in srgb, var(--danger) 45%, transparent); color: var(--ink);
       font-size: 12px; line-height: 1.45; white-space: normal; }
     .assigned-head:has(.ah-warn) { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
-    a.tab { color: var(--ink-dim); text-decoration: none; margin-right: 16px; }
+    a.tab, button.tab { color: var(--ink-dim); text-decoration: none; margin-right: 16px; }
+    button.tab { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+    button.tab:hover { color: var(--ink); }
     a.tab.active { color: var(--accent); }
     .admin-clock { font-family: var(--mono, monospace); font-variant-numeric: tabular-nums;
       font-size: 13px; color: var(--ink-dim); margin-right: 20px; white-space: nowrap; }

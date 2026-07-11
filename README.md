@@ -109,6 +109,41 @@ Example config block:
 "admin": { "user": "operator", "passwordHash": "scrypt$ab12…$cd34…" }
 ```
 
+**Important — edit the *live* config, not the example.** The server reads only the
+`config.json` on the Docker volume at `/data/config.json` (the `neuron_config` volume). The
+file in `config/config.example.json` is a template for reference and is never read at
+runtime, so adding the credential there has no effect. To set the credential on a running
+deployment:
+
+1. Generate the hash on any machine with the repo:
+
+   ```bash
+   node server/auth.js "your-real-password"
+   ```
+
+2. Open a shell in the container (Alpine, so `/bin/sh`) and edit the live file:
+
+   ```sh
+   vi /data/config.json
+   ```
+
+   Add the `admin` block as a **top-level** key — a sibling of `cards`, `panels`,
+   `headFilters`, etc., not nested inside any of them. For example, right after the opening
+   `{`:
+
+   ```json
+   "admin": { "user": "operator", "passwordHash": "scrypt$…your hash…" },
+   ```
+
+   (Alternatively, edit the volume on the host directly, typically at
+   `/var/lib/docker/volumes/neuron_config/_data/config.json`.)
+
+3. **Restart the container.** The config cache loads once at startup, so a hand-edit to
+   `config.json` only takes effect after a restart.
+
+Watch for valid JSON (no trailing comma, matched quotes) — a malformed file fails to load.
+If unsure, validate before restarting.
+
 Signing in sets a session cookie that ends when the browser session closes or after 30
 minutes of inactivity; there is no persistent "remember me." Loading the admin page
 without a valid session redirects to the login screen. The panel-facing API is always
