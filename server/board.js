@@ -222,19 +222,65 @@ export async function getHeadWidget(ip, headUuid, widgetUuid) {
 // Repoint a single widget to a different input group. Fetches the current widget, swaps
 // ONLY groupUuid, and PUTs it back as a WidgetChange (preserving geometry/elements/etc).
 // This is a live edit to the on-air board.
-export async function setWidgetGroup(ip, headUuid, widgetUuid, groupUuid) {
-  const w = await getHeadWidget(ip, headUuid, widgetUuid);
-  const change = {
+// Repoint a widget to a different input group. The board API has no conditional/versioned
+// write, so this is inherently a read-modify-write: we must send the whole widget back,
+// changing only groupUuid. The risk is a concurrent change (another operator firing a
+// restore onto this head, or the native GUI) landing between our read and our write, which
+// we'd then clobber with the stale copy.
+//
+// Mitigation without server support: read the widget TWICE — once to build the change, and
+// again immediately before writing. If the preserved fields (elements/geometry/name) differ
+// between the two reads, something is actively modifying this widget right now, so we ABORT
+// with a conflict rather than overwrite. We always build the PUT from the SECOND (freshest)
+// read, so in the common case we write the latest widget with only the group swapped — never
+// a stale snapshot of it. Full before/after is logged so any clobber is diagnosable.
+function widgetFingerprint(w) {
+  // Fields we preserve verbatim. If any changed between reads, a concurrent write is in
+  // progress. JSON stringify is fine here — order is stable from the same source object.
+  return JSON.stringify({
     elements: w.elements || [],
-    geometry: w.geometry,
-    groupUuid,
+    geometry: w.geometry || null,
     name: w.name || '',
-    properties: w.properties || { borderColor: '', borderSize: '' },
+    properties: w.properties || null,
+  });
+}
+
+export async function setWidgetGroup(ip, headUuid, widgetUuid, groupUuid) {
+  const first = await getHeadWidget(ip, headUuid, widgetUuid);
+  // Re-read right before writing to catch a concurrent modification in the gap.
+  const fresh = await getHeadWidget(ip, headUuid, widgetUuid);
+
+  if (widgetFingerprint(first) !== widgetFingerprint(fresh)) {
+    log({
+      ip, method: 'CONFLICT', path: `/heads/${headUuid}/widgets/${widgetUuid}`,
+      status: null, ok: false,
+      detail: 'widget changed between reads — concurrent restore or GUI edit; group change aborted to avoid clobber',
+    });
+    const err = new Error('This window was changed by another action while you were editing. '
+      + 'Your input-group change was not applied. Please try again.');
+    err.status = 409;
+    throw err;
+  }
+
+  const before = { groupUuid: fresh.groupUuid || '' };
+  // Build the write from the freshest read, changing ONLY the group.
+  const change = {
+    elements: fresh.elements || [],
+    geometry: fresh.geometry,
+    groupUuid,
+    name: fresh.name || '',
+    properties: fresh.properties || { borderColor: '', borderSize: '' },
   };
-  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
+  const result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
     method: 'PUT',
     body: JSON.stringify(change),
   });
+  log({
+    ip, method: 'GROUP', path: `/heads/${headUuid}/widgets/${widgetUuid}`,
+    status: null, ok: true,
+    detail: `group ${before.groupUuid || '(none)'} -> ${groupUuid}`,
+  });
+  return result;
 }
 
 // Reduce a raw widget (WidgetGet) to the minimal shape the preview renderer needs:

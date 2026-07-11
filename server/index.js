@@ -242,12 +242,23 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
     // what distinguishes a board that returned a malformed blob (e.g. a snapshot name with
     // unescaped characters) from a genuinely head-less snapshot.
     if (heads.length === 0) {
-      const raw = modelEntry.model && typeof modelEntry.model.data === 'string' ? modelEntry.model.data : '';
-      const rootType = modelEntry.root && typeof modelEntry.root === 'object' ? 'object' : typeof modelEntry.root;
+      const root = modelEntry.root;
+      let shape = typeof root;
+      try {
+        if (root && typeof root === 'object') {
+          // Top-level keys, and for each key a hint of what's under it, so we can see where
+          // heads actually live in this board's model structure.
+          shape = Object.entries(root).map(([k, v]) => {
+            if (Array.isArray(v)) return `${k}[${v.length}]`;
+            if (v && typeof v === 'object') return `${k}{${Object.keys(v).slice(0, 6).join(',')}}`;
+            return `${k}=${String(v).slice(0, 20)}`;
+          }).join(' ');
+        }
+      } catch { shape = 'introspection-failed'; }
       log({
         ip: card.ip, method: 'PARSE', path: `/snapshots/${req.params.snapUuid}/model`,
         status: null, ok: false,
-        detail: `no heads extracted; rootType=${rootType} rawLen=${raw.length} rawHead=${raw.slice(0, 80)}`,
+        detail: `no heads extracted; rootType=${typeof root}; keys: ${String(shape).slice(0, 400)}`,
       });
     }
 
@@ -600,7 +611,25 @@ app.get('/api/admin/cards/:cardId/reach', requireAdmin, async (req, res) => {
   }
 });
 
-// --- WebSocket fan-out ------------------------------------------------------
+// Per-card snapshot storage usage. The Neuron cards cap snapshot storage at 200 MB, so
+// percentage is computed against that fixed ceiling (the board's own totalStorageBytes is
+// passed through too, but 200 MB is the authoritative denominator per the hardware spec).
+const STORAGE_MAX_BYTES = 200 * 1024 * 1024;
+app.get('/api/admin/cards/:cardId/storage', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
+  try {
+    const info = await getSnapshotInfo(card.ip);
+    const used = Number(info?.usedStorageBytes) || 0;
+    const boardTotal = Number(info?.totalStorageBytes) || 0;
+    const percent = Math.min(100, Math.round((used / STORAGE_MAX_BYTES) * 100));
+    res.json({ ok: true, usedBytes: used, maxBytes: STORAGE_MAX_BYTES, boardTotalBytes: boardTotal, percent });
+  } catch (e) {
+    res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });
+  }
+});
 // Panels connect to our server (ws://<container>/ws?card=<id>). We open one
 // upstream connection per distinct board and relay messages to subscribers.
 // This keeps board IPs hidden and avoids each panel hammering the board directly.

@@ -85,6 +85,7 @@ function renderCards() {
       <td><input value="${esc(c.id || '')}" data-i="${i}" data-f="id"></td>
       <td><input value="${esc(c.label || '')}" data-i="${i}" data-f="label"></td>
       <td><input value="${esc(c.ip || '')}" data-i="${i}" data-f="ip" placeholder="10.10.60.x"></td>
+      <td><div class="stor" data-stor="${esc(c.id || '')}"><span class="stor-idle muted">—</span></div></td>
       <td><button class="btn sm del" data-del="${i}">Remove</button></td>`;
     tb.appendChild(tr);
   });
@@ -97,6 +98,40 @@ function renderCards() {
   }));
   if (typeof renderReachRow === 'function') renderReachRow();
   if (typeof renderHeadFilterCards === 'function') renderHeadFilterCards();
+  if (typeof loadAllStorage === 'function') loadAllStorage();
+}
+
+// Fetch and render snapshot-storage usage for every card with an IP. Percentage is against
+// the cards' 200 MB ceiling; the bar turns amber past 75% and red past 90% — the documented
+// danger zone where the storage layer can misbehave if overfilled.
+async function loadAllStorage() {
+  for (const c of config.cards) {
+    if (!c.id) continue;
+    const slot = document.querySelector(`[data-stor="${cssEsc(c.id)}"]`);
+    if (!slot) continue;
+    if (!c.ip) { slot.innerHTML = '<span class="stor-idle muted">no IP</span>'; continue; }
+    slot.innerHTML = '<span class="stor-idle muted">…</span>';
+    try {
+      const r = await fetch(`/api/admin/cards/${encodeURIComponent(c.id)}/storage`, { headers: headers() });
+      const d = await r.json();
+      if (!d.ok) { slot.innerHTML = `<span class="stor-err" title="${esc(d.detail || d.error || 'error')}">unreachable</span>`; continue; }
+      const pct = d.percent;
+      const level = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : 'ok';
+      const usedMB = (d.usedBytes / (1024 * 1024)).toFixed(1);
+      slot.innerHTML = `
+        <div class="stor-bar" title="${usedMB} MB of 200 MB used">
+          <div class="stor-fill ${level}" style="width:${pct}%"></div>
+        </div>
+        <span class="stor-pct ${level}">${pct}%</span>`;
+    } catch (e) {
+      slot.innerHTML = `<span class="stor-err">error</span>`;
+    }
+  }
+}
+
+// Escape a string for use inside a CSS attribute selector (card IDs are user-defined).
+function cssEsc(s) {
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\\]]/g, '\\$&');
 }
 
 $('addCard').addEventListener('click', () => {

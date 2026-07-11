@@ -81,6 +81,18 @@
     .assigned-head .ah-all { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-dim); white-space: nowrap; cursor: pointer; }
     .assigned-head .ah-all input { width: 16px; height: 16px; }
     .assigned-head .btn.sm { min-height: 34px; padding: 0 12px; }
+    /* Per-card snapshot storage readout in the Setup card table. */
+    .stor { display: flex; align-items: center; gap: 8px; }
+    .stor-bar { flex: 1; height: 8px; background: var(--panel-2); border: 1px solid var(--line);
+      border-radius: 5px; overflow: hidden; min-width: 60px; }
+    .stor-fill { height: 100%; background: var(--accent); transition: width .3s; }
+    .stor-fill.warn { background: #d9a341; }
+    .stor-fill.crit { background: var(--danger); }
+    .stor-pct { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+    .stor-pct.warn { color: #d9a341; }
+    .stor-pct.crit { color: var(--danger); font-weight: 600; }
+    .stor-err { font-size: 12px; color: var(--danger); }
+    .stor-idle { font-size: 12px; }
     /* Missing-head warning: a full board restore changed head IDs. */
     .assigned-head .ah-warn { margin-top: 8px; padding: 8px 10px; border-radius: 6px;
       background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border: 1px solid
@@ -276,7 +288,7 @@
         <h2>MV cards</h2>
         <div class="desc">The 12 multiviewer cards. Each has a stable id, a friendly label, and the board's IP address. Board IPs are never sent to the touch panels.</div>
         <table>
-          <thead><tr><th style="width:120px">ID</th><th>Label</th><th style="width:200px">Board IP</th><th style="width:180px"></th></tr></thead>
+          <thead><tr><th style="width:110px">ID</th><th style="width:200px">Label</th><th style="width:150px">Board IP</th><th style="width:150px">Storage</th><th style="width:90px"></th></tr></thead>
           <tbody id="cardRows"></tbody>
         </table>
         <div style="margin-top:12px" class="inline">
