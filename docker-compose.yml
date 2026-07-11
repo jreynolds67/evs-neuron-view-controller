@@ -8,9 +8,9 @@ services:
     ports:
       - "80:8080"
     environment:
-      # Set a token to protect the admin API/page. Leave unset to keep admin open
-      # (only do that on a trusted, isolated control network).
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Admin access is a username/password stored (hashed) in config.json under
+      # `admin: { user, passwordHash }`. Generate a hash with:
+      #   node server/auth.js "yourpassword"
       PORT: "8080"
       CONFIG_PATH: /data/config.json
       # Board transport. Neuron boards use HTTPS with a self-signed cert by default.

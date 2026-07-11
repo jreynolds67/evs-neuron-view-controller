@@ -6,11 +6,27 @@ const $ = (id) => document.getElementById(id);
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 const byName = (a, b) => collator.compare(a.name || '', b.name || '');
 
-// Admin token was removed from the UI. These stubs keep the request helpers working
-// (no token is ever sent — the server treats a missing token as "open").
-function token() { return ''; }
+// Auth: the admin page is gated by a session cookie (set at login, sent automatically).
+// No token/header is needed. headers() remains for JSON content-type on write calls.
 function headers() {
   return { 'Content-Type': 'application/json' };
+}
+// Any admin API call that comes back 401 means the session expired (30-min idle) or was
+// cleared — bounce to the login page. Wrap fetch once so every call is covered.
+const _rawFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await _rawFetch(...args);
+  try {
+    const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+    if (res.status === 401 && url.startsWith('/api/admin/') && !url.endsWith('/login')) {
+      window.location.href = '/login.html';
+    }
+  } catch {}
+  return res;
+};
+async function logout() {
+  try { await _rawFetch('/api/admin/logout', { method: 'POST' }); } catch {}
+  window.location.href = '/login.html';
 }
 function setLoadState(msg) { const el = $('loadState'); if (el) el.textContent = msg; }
 function toast(msg, kind = '') {
@@ -1310,12 +1326,6 @@ function renderBackupFiles(files) {
         <a class="btn sm ghost bk-dl" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download>Download</a>
         <button class="btn sm del bk-del">Delete</button>
       </td>`;
-    // If a token is set, downloads need the header — use a JS handler instead of a bare link.
-    if (token()) {
-      const a = tr.querySelector('.bk-dl');
-      a.removeAttribute('href');
-      a.addEventListener('click', () => downloadWithToken(f.file));
-    }
     tr.querySelector('.bk-del').addEventListener('click', () => deleteBackup(f.file));
     tb.appendChild(tr);
   });
@@ -1330,16 +1340,6 @@ async function deleteBackup(file) {
     renderBackupFiles(files.files || []);
     $('bkState').textContent = `Deleted ${file}`;
   } catch (e) { $('bkState').textContent = 'Delete failed: ' + e.message; }
-}
-
-async function downloadWithToken(file) {
-  const res = await fetch(`/api/admin/backup/download/${encodeURIComponent(file)}`, { headers: headers() });
-  if (!res.ok) { toast('Download failed', 'err'); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = file; document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
 }
 
 $('bkSave').addEventListener('click', async () => {
@@ -1380,7 +1380,12 @@ $('bkRun').addEventListener('click', async () => {
   } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
 });
 
-loadConfig();
+const logoutBtn = $('logoutBtn');
+if (logoutBtn) logoutBtn.addEventListener('click', logout);
+
+// Verify the session up front. If it's already expired, the fetch wrapper redirects to
+// login; otherwise loadConfig() proceeds. (The page load itself is also server-gated.)
+fetch('/api/admin/session').then((r) => { if (r.ok) loadConfig(); });
 refreshLog(true);
 startLogAuto();
 

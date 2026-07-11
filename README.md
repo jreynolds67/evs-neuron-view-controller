@@ -86,17 +86,33 @@ CONFIG_PATH=./config/config.json npm start
 1. Push this repo to GitHub.
 2. Portainer → Stacks → Add stack → *Repository*, point at the repo, compose path
    `docker-compose.yml`.
-3. Set the `ADMIN_TOKEN` environment variable in the stack (recommended).
+3. Set an admin credential in `config.json` (see **Admin login** below).
 4. Deploy. The app is on port `8080`; config persists in the `neuron_config` volume.
 
 **Option B — Prebuilt image:** build and push to a registry (e.g. GHCR), then set
 `image:` in `docker-compose.yml` instead of `build:`.
 
-### Admin token
+### Admin login
 
-Set `ADMIN_TOKEN` to protect the admin API and page. If unset, the admin API is open —
-only acceptable on an isolated control network. The panel-facing API is always scoped by
-source IP regardless.
+Admin access requires a username/password stored in `config.json` under
+`admin: { user, passwordHash }`. The password is stored as a salted scrypt hash, never
+plaintext. Generate a hash and paste it into config:
+
+```bash
+node server/auth.js "yourpassword"
+# -> scrypt$<salt>$<hash>   (copy this whole string into admin.passwordHash)
+```
+
+Example config block:
+
+```json
+"admin": { "user": "operator", "passwordHash": "scrypt$ab12…$cd34…" }
+```
+
+Signing in sets a session cookie that ends when the browser session closes or after 30
+minutes of inactivity; there is no persistent "remember me." Loading the admin page
+without a valid session redirects to the login screen. The panel-facing API is always
+scoped by source IP regardless of admin login.
 
 ## Notes / things to verify on hardware
 

@@ -23,14 +23,26 @@ import { startShareSweep, shareSweepStatus, runShareSweepNow, applyShareSweepCon
 import {
   startBackupScheduler, runBackupNow, backupStatus, listBackups, backupFilePath,
 } from './backup.js';
+import {
+  verifyPassword, createSession, touchSession, destroySession,
+  sessionIdFromReq, setSessionCookie, clearSessionCookie,
+} from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, '..', 'public');
 const PORT = process.env.PORT || 8080;
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
+
+// Gate the admin page itself: an unauthenticated load is redirected to the login page.
+// This must run BEFORE express.static, which would otherwise serve admin.html to anyone.
+// API calls are gated separately by requireAdmin; this is only the HTML shell.
+app.get(['/admin', '/admin.html'], (req, res, next) => {
+  if (touchSession(sessionIdFromReq(req))) return next(); // valid session → let static serve it
+  return res.redirect(302, '/login.html');
+});
+
 // No-cache on static assets: these are operator panels that must pick up a redeploy on
 // their next load without any manual cache-clearing. The payloads are tiny, so skipping
 // caching costs nothing meaningful and guarantees fresh code (e.g. the control-reload WS).
@@ -54,10 +66,11 @@ function clientIp(req) {
   return ip;
 }
 
+// Admin API gate: a valid, non-idle session cookie is required. Touching the session here
+// also slides the 30-minute idle window forward on every admin request.
 function requireAdmin(req, res, next) {
-  if (!ADMIN_TOKEN) return next(); // token optional; set ADMIN_TOKEN to enable
-  if (req.headers['x-admin-token'] === ADMIN_TOKEN) return next();
-  return res.status(401).json({ error: 'Admin token required' });
+  if (touchSession(sessionIdFromReq(req))) return next();
+  return res.status(401).json({ error: 'Not authenticated' });
 }
 
 function sendErr(res, e) {
@@ -344,10 +357,51 @@ app.post('/api/panel/cards/:cardId/snapshots/:snapUuid/restore', async (req, res
   } catch (e) { sendErr(res, e); }
 });
 
+// --- admin auth ------------------------------------------------------------
+
+// Read the admin credential from config. Shape: config.admin = { user, passwordHash }.
+// If no credential is configured, admin auth is effectively disabled and login always
+// fails — the operator is expected to set one (the login page explains this).
+async function getAdminCred() {
+  const cfg = await loadConfig();
+  const a = cfg.admin || {};
+  return { user: a.user || '', passwordHash: a.passwordHash || '' };
+}
+
+app.post('/api/admin/login', async (req, res) => {
+  const { user, password } = req.body || {};
+  const cred = await getAdminCred();
+  if (!cred.user || !cred.passwordHash) {
+    return res.status(503).json({ error: 'No admin credential is configured on the server.' });
+  }
+  const userOk = typeof user === 'string' && user === cred.user;
+  const passOk = verifyPassword(password || '', cred.passwordHash);
+  // Check both regardless of the username result to avoid leaking which field was wrong.
+  if (!userOk || !passOk) return res.status(401).json({ error: 'Invalid username or password.' });
+  const id = createSession(cred.user);
+  setSessionCookie(res, id);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  destroySession(sessionIdFromReq(req));
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Lightweight check the admin page calls on load to confirm the session is still valid.
+app.get('/api/admin/session', (req, res) => {
+  const s = touchSession(sessionIdFromReq(req));
+  if (!s) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ ok: true, user: s.user });
+});
+
 // --- admin API -------------------------------------------------------------
 
 app.get('/api/admin/config', requireAdmin, async (_req, res) => {
-  res.json(await loadConfig());
+  const cfg = await loadConfig();
+  const { admin, ...safe } = cfg; // never expose the password hash to the client
+  res.json(safe);
 });
 
 app.put('/api/admin/config', requireAdmin, async (req, res) => {
@@ -359,6 +413,12 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
   if (!Array.isArray(next.panelGroups)) next.panelGroups = [];
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
+  // The admin credential is never sent to or accepted from the client. Always preserve the
+  // stored value so a config save can't clear or alter the login.
+  {
+    const existing = await loadConfig();
+    if (existing.admin) next.admin = existing.admin; else delete next.admin;
+  }
   // Preserve backup config (managed via its own endpoint) if the admin PUT omits it.
   if (next.backup === undefined) {
     const existing = await loadConfig();
@@ -495,18 +555,6 @@ app.delete('/api/admin/backup/files/:file', requireAdmin, async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Delete a single backup file. Same filename validation guards against traversal.
-app.delete('/api/admin/backup/files/:file', requireAdmin, async (req, res) => {
-  const path = backupFilePath(req.params.file);
-  if (!path || !existsSync(path)) return res.status(404).json({ error: 'Not found' });
-  try {
-    await unlink(path);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // Reachability probe: try a lightweight GET against a card's board and report the
 // raw outcome (status or connection error code). Does not change anything on the board.
 app.get('/api/admin/cards/:cardId/reach', requireAdmin, async (req, res) => {
@@ -626,10 +674,16 @@ wss.on('connection', async (client, req) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Neuron MV Control listening on :${PORT}`);
   startShareSweep();
   startBackupScheduler();
   console.log(`Config path: ${process.env.CONFIG_PATH || '/data/config.json'}`);
-  if (!ADMIN_TOKEN) console.log('ADMIN_TOKEN not set — admin API is open. Set it for production.');
+  try {
+    const cfg = await loadConfig();
+    if (!cfg.admin || !cfg.admin.user || !cfg.admin.passwordHash) {
+      console.log('WARNING: no admin credential configured — admin login is unavailable until '
+        + 'config.admin.{user,passwordHash} is set. Generate a hash with: node server/auth.js "password"');
+    }
+  } catch {}
 });
