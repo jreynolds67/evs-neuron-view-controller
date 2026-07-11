@@ -591,10 +591,6 @@ function renderHeadList(pi) {
         <span class="order-pos">${i + 1}</span>
         <input class="ah-label" placeholder="${esc(h.boardName || 'Display label')}" value="${esc(h.label || '')}">
         <span class="ah-source muted"></span>
-        <label class="ah-all" title="Show all snapshots on this panel, ignoring the global head filter">
-          <input type="checkbox" class="ah-all-cb" ${h.showAllSnapshots ? 'checked' : ''}>
-          <span>All snapshots</span>
-        </label>
         <button class="btn sm del ah-del">Remove</button>
       </div>`;
     row.querySelector('.ah-source').textContent =
@@ -609,9 +605,6 @@ function renderHeadList(pi) {
       row.querySelector('.ah-top').after(warn);
     }
     row.querySelector('.ah-label').addEventListener('input', (e) => { h.label = e.target.value; });
-    row.querySelector('.ah-all-cb').addEventListener('change', (e) => {
-      if (e.target.checked) h.showAllSnapshots = true; else delete h.showAllSnapshots;
-    });
     row.querySelector('.ah-del').addEventListener('click', () => {
       p.heads.splice(i, 1); renderHeadList(pi); renderLayoutEditor(pi);
     });
@@ -1363,6 +1356,13 @@ async function refreshBackup() {
 
 function renderBackupFiles(files) {
   const tb = $('bkFiles'); tb.innerHTML = '';
+  const totalEl = $('bkTotal');
+  if (totalEl) {
+    const total = files.reduce((sum, f) => sum + (f.bytes || 0), 0);
+    totalEl.textContent = files.length
+      ? `${files.length} file${files.length === 1 ? '' : 's'} · ${fmtBytes(total)} used on server`
+      : '';
+  }
   if (!files.length) { tb.innerHTML = '<tr><td colspan="4" class="muted">No backups yet.</td></tr>'; return; }
   files.forEach((f) => {
     const tr = document.createElement('tr');

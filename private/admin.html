@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Neuron MV Control — Admin</title>
+  <title>EVS Neuron View Control - Settings</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <style>
@@ -80,6 +80,21 @@
     .assigned-head .ah-filter { margin-top: 8px; }
     .assigned-head .ah-all { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-dim); white-space: nowrap; cursor: pointer; }
     .assigned-head .ah-all input { width: 16px; height: 16px; }
+    /* Scheduled-backup control row: every field is a bottom-aligned label-over-input stack of
+       equal control height, so inputs, the checkbox, and buttons all share one baseline. */
+    .bk-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+    .bk-controls .bk-field { display: flex; flex-direction: column; gap: 5px; }
+    .bk-controls .bk-field > label.muted { font-size: 12px; line-height: 1; }
+    .bk-controls .bk-field > select,
+    .bk-controls .bk-field > input { height: 36px; box-sizing: border-box; }
+    .bk-controls #bkCard { min-width: 200px; }
+    .bk-controls #bkTime { width: 90px; }
+    .bk-controls #bkRetention { width: 110px; }
+    .bk-controls .btn.sm { height: 36px; display: inline-flex; align-items: center; }
+    /* The Enabled checkbox aligns its box to the same 36px control height as the inputs. */
+    .bk-controls .bk-check { flex-direction: row; align-items: center; gap: 8px; height: 36px; cursor: pointer; font-size: 14px; }
+    .bk-controls .bk-check input { width: 18px; height: 18px; margin: 0; }
+    .bk-controls .bk-state { align-self: center; }
     .assigned-head .btn.sm { min-height: 34px; padding: 0 12px; }
     /* Per-card snapshot storage readout in the Setup card table. */
     .stor { display: flex; align-items: center; gap: 8px; }
@@ -189,7 +204,7 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="title">Neuron MV Control — Admin</div>
+    <div class="title">EVS Neuron View Control - Settings</div>
     <div class="spacer"></div>
     <div class="admin-clock" id="adminClock" title="Container time">--:--:--</div>
     <a class="tab active" href="admin.html">Admin</a>
@@ -224,7 +239,7 @@
     <div class="tabpanel" data-tabpanel="heads">
       <div class="section">
         <h2>Head snapshot filters (global)</h2>
-        <div class="desc">Set which snapshots are permitted for each head. These apply to that head on <b>every</b> panel. A panel can override a head with “All snapshots” to show everything regardless of this filter.</div>
+        <div class="desc">Set which snapshots are permitted for each head. These apply to that head on <b>every</b> panel.</div>
         <div class="inline" style="gap:10px; margin-bottom:10px">
           <label class="muted">Card</label>
           <select id="hfCard" style="max-width:280px"><option value="">— select a card —</option></select>
@@ -254,20 +269,22 @@
       <!-- BACKUP -->
       <div class="section">
         <h2>Scheduled backup</h2>
-        <div class="desc">Exports a target board's snapshots on a daily schedule, dated and retained for a set number of days. Files download from here — nothing is left on the Neuron.</div>
-        <div class="inline" style="gap:12px; flex-wrap:wrap">
-          <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="bkEnabled" style="width:18px;height:18px"> Enabled</label>
-          <div><label class="muted">Board</label><select id="bkCard" style="min-width:200px"></select></div>
-          <div><label class="muted">Time (24h)</label><input id="bkTime" placeholder="03:00" style="width:90px"></div>
-          <div><label class="muted">Retention (days)</label><input id="bkRetention" type="number" min="1" max="365" style="width:90px"></div>
-          <div style="align-self:flex-end"><button class="btn sm" id="bkSave">Save schedule</button></div>
-          <div style="align-self:flex-end"><button class="btn sm ghost" id="bkRun">Back up now</button></div>
-          <span class="muted" id="bkState"></span>
+        <div class="desc">Exports a target board's snapshots on a daily schedule, dated and retained for a set number of days.</div>
+        <div class="bk-controls">
+          <label class="bk-field bk-check"><input type="checkbox" id="bkEnabled"> <span>Enabled</span></label>
+          <div class="bk-field"><label class="muted">Board</label><select id="bkCard"></select></div>
+          <div class="bk-field"><label class="muted">Time (24h)</label><input id="bkTime" placeholder="03:00"></div>
+          <div class="bk-field"><label class="muted">Retention (days)</label><input id="bkRetention" type="number" min="1" max="365"></div>
+          <button class="btn sm" id="bkSave">Save schedule</button>
+          <button class="btn sm ghost" id="bkRun">Back up now</button>
+          <span class="muted bk-state" id="bkState"></span>
         </div>
-        <div style="margin-top:14px"><label class="muted">Available backups</label>
-          <table style="margin-top:6px"><thead><tr><th>File</th><th style="width:120px">Size</th><th style="width:180px">Date</th><th style="width:120px"></th></tr></thead>
+        <div style="margin-top:14px; display:flex; align-items:baseline; justify-content:space-between">
+          <label class="muted">Available backups</label>
+          <span class="muted" id="bkTotal"></span>
+        </div>
+        <table style="margin-top:6px"><thead><tr><th>File</th><th style="width:120px">Size</th><th style="width:180px">Date</th><th style="width:120px"></th></tr></thead>
           <tbody id="bkFiles"></tbody></table>
-        </div>
       </div>
     </div>
 
@@ -286,7 +303,6 @@
       <!-- CARDS -->
       <div class="section">
         <h2>MV cards</h2>
-        <div class="desc">The 12 multiviewer cards. Each has a stable id, a friendly label, and the board's IP address. Board IPs are never sent to the touch panels.</div>
         <table>
           <thead><tr><th style="width:110px">ID</th><th style="width:200px">Label</th><th style="width:150px">Board IP</th><th style="width:150px">Storage</th><th style="width:90px"></th></tr></thead>
           <tbody id="cardRows"></tbody>

@@ -101,15 +101,12 @@ export function getPanelHead(panel, cardId, headUuid) {
   return panel.heads.find((h) => h.cardId === cardId && h.headUuid === headUuid) || null;
 }
 
-// Snapshot filtering is now GLOBAL per head, keyed by "cardId::headUuid" in
-// config.headFilters. A panel-head may set showAllSnapshots:true to OVERRIDE the global
-// filter and show everything for that head on that panel.
+// Snapshot filtering is GLOBAL per head, keyed by "cardId::headUuid" in config.headFilters.
+// (Operators can still temporarily see everything on a panel via the per-panel "Show all"
+// override, which is applied at request time — not stored per head.)
 //
-// Resolution: returns the allowed snapshot UUID list, or null = allow all.
-//   - panelHead.showAllSnapshots === true  -> null (all allowed, overrides global)
-//   - otherwise -> the global filter for that head (or null if none defined)
+// Resolution: returns the allowed snapshot UUID list, or null = allow all (no filter defined).
 export function resolveAllowedSnapshots(config, panelHead, cardId, headUuid) {
-  if (panelHead && panelHead.showAllSnapshots === true) return null;
   const filters = config.headFilters || {};
   const list = filters[`${cardId}::${headUuid}`];
   return Array.isArray(list) && list.length ? list : null;
