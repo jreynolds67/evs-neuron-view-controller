@@ -115,6 +115,13 @@
     .stor-pct.crit { color: var(--danger); font-weight: 600; }
     .stor-err { font-size: 12px; color: var(--danger); }
     .stor-idle { font-size: 12px; }
+    .stor-anom { font-size: 12px; color: #d9a341; }
+    /* Sync diagnostics */
+    .syncdiag-card { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+    .syncdiag-title { font-weight: 600; margin-bottom: 8px; }
+    .syncdiag-table { width: 100%; font-size: 13px; }
+    .syncdiag-table td:first-child { width: 130px; color: var(--ink-dim); vertical-align: top; padding: 3px 8px 3px 0; }
+    .syncdiag-table td { padding: 3px 0; }
     /* Missing-head warning: a full board restore changed head IDs. */
     .assigned-head .ah-warn { margin-top: 8px; padding: 8px 10px; border-radius: 6px;
       background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border: 1px solid
@@ -317,6 +324,14 @@
         <div style="margin-top:12px" class="inline">
           <button class="btn sm" id="addCard">Add card</button>
         </div>
+      </div>
+
+      <!-- SYNC DIAGNOSTICS -->
+      <div class="section">
+        <h2>Sync diagnostics</h2>
+        <div class="desc">Investigate the boards' native card-to-card snapshot sync. "Check" reads each board's sync config, live status, and snapshot flag breakdown (shared / read-only / deleted). "Trigger" manually kicks the board's sync and reports the result. Read-only for config — nothing is changed except the manual trigger.</div>
+        <div class="inline" id="syncDiagCards" style="margin-bottom:10px"></div>
+        <div id="syncDiagOut"></div>
       </div>
 
       <!-- API LOG -->

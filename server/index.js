@@ -12,7 +12,8 @@ import {
   getPanelHead, resolveAllowedSnapshots, getHeadFilter,
 } from './config.js';
 import {
-  getSelf, getSnapshotInfo, getSnapshotMeta, getStorageStatus, getHeads,
+  getSelf, getSnapshotInfo, getSnapshotMeta, getStorageStatus,
+  getStorageSync, triggerStorageSync, getHeads,
   getSnapshotModel, extractSnapshotHeads, restorePartial,
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
@@ -800,7 +801,71 @@ app.get('/api/admin/cards/:cardId/storage', requireAdmin, async (req, res) => {
     res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });
   }
 });
-// Server-side WebSocket. Only the "control" channel is used: panels open it on load and
+// Sync diagnostics for one card: the board's own sync config + live status + a flag
+// breakdown of its snapshots. This is a read-only investigation aid for the post-firmware
+// sync failures — it surfaces the board's own failure message and shows whether flags like
+// readOnly / shared correlate with what's failing.
+app.get('/api/admin/cards/:cardId/sync-diagnostics', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
+  const out = { ok: true, cardId: card.id, label: card.label || card.id };
+
+  // Board sync config (may be absent on older firmware).
+  try { out.syncConfig = await getStorageSync(card.ip); }
+  catch (e) { out.syncConfig = null; out.syncConfigError = e.code || e.message; }
+
+  // Live activity + sync state/message.
+  try {
+    const st = await getStorageStatus(card.ip);
+    out.activity = st.activity; out.syncState = st.syncState; out.syncMessage = st.syncMessage;
+    out.tasks = (st.tasks || []).map((t) => ({ name: t.name, state: t.state, message: t.message }));
+  } catch (e) { out.statusError = e.code || e.message; }
+
+  // Snapshot flag breakdown — counts + a sample of any readOnly / unshared / deleted entries,
+  // since those are the flags most likely to block a sync.
+  try {
+    const info = await getSnapshotInfo(card.ip);
+    const entries = (info.snapshots || []).map(normalizeSnapshotEntry).filter((e) => e.uuid);
+    const readOnly = entries.filter((e) => e.readOnly);
+    const unshared = entries.filter((e) => e.shared !== true && !e.deleted);
+    const deleted = entries.filter((e) => e.deleted);
+    out.snapshotFlags = {
+      total: entries.length,
+      shared: entries.filter((e) => e.shared === true).length,
+      unshared: unshared.length,
+      readOnly: readOnly.length,
+      deleted: deleted.length,
+      usedBytes: Number(info?.usedStorageBytes) || null,
+      totalBytes: Number(info?.totalStorageBytes) || null,
+      // Small samples so you can spot the offenders without dumping everything.
+      readOnlySample: readOnly.slice(0, 10).map((e) => e.name || e.uuid),
+      unsharedSample: unshared.slice(0, 10).map((e) => e.name || e.uuid),
+    };
+  } catch (e) { out.snapshotError = e.code || e.message; }
+
+  res.json(out);
+});
+
+// Manually trigger the board's native sync, then read status so the result is visible.
+app.post('/api/admin/cards/:cardId/sync-trigger', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
+  try {
+    await triggerStorageSync(card.ip);
+    // Give the board a moment, then report status.
+    await new Promise((r) => setTimeout(r, 1500));
+    const st = await getStorageStatus(card.ip);
+    res.json({ ok: true, activity: st.activity, syncState: st.syncState, syncMessage: st.syncMessage });
+  } catch (e) {
+    res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });
+  }
+});
+
+
 // hold it for the session so the server can push small JSON messages (currently just
 // { type:'reload' } after a config save). The former per-card board fan-out was removed —
 // the Neuron boards don't expose a consumable WS endpoint (the handshake returns an HTTP

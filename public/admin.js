@@ -97,6 +97,7 @@ function renderCards() {
     config.cards.splice(+e.target.dataset.del, 1); renderCards(); renderPanels();
   }));
   if (typeof renderReachRow === 'function') renderReachRow();
+  if (typeof renderSyncDiagCards === 'function') renderSyncDiagCards();
   if (typeof renderHeadFilterCards === 'function') renderHeadFilterCards();
   if (typeof loadAllStorage === 'function') loadAllStorage();
 }
@@ -1382,7 +1383,80 @@ function renderReachRow() {
   });
 }
 
-// ---- Share sweep ----------------------------------------------------------
+// ---- Sync diagnostics -----------------------------------------------------
+
+function renderSyncDiagCards() {
+  const row = $('syncDiagCards'); if (!row) return;
+  row.innerHTML = '';
+  config.cards.forEach((c) => {
+    if (!c.id) return;
+    const check = document.createElement('button');
+    check.className = 'btn sm ghost';
+    check.textContent = `Check ${c.label || c.id}`;
+    check.addEventListener('click', () => runSyncDiag(c));
+    row.appendChild(check);
+  });
+  // One button to check every card in sequence.
+  if (config.cards.some((c) => c.id)) {
+    const all = document.createElement('button');
+    all.className = 'btn sm';
+    all.textContent = 'Check all';
+    all.addEventListener('click', async () => {
+      $('syncDiagOut').innerHTML = '';
+      for (const c of config.cards) if (c.id) await runSyncDiag(c, true);
+    });
+    row.appendChild(all);
+  }
+}
+
+async function runSyncDiag(card, append = false) {
+  const out = $('syncDiagOut');
+  if (!append) out.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'syncdiag-card';
+  box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)} — checking…</div>`;
+  out.appendChild(box);
+  try {
+    const d = await fetch(`/api/admin/cards/${card.id}/sync-diagnostics`, { headers: headers() }).then(r => r.json());
+    if (!d.ok) { box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div><div class="stor-err">${esc(d.error || 'error')}</div>`; return; }
+
+    const sc = d.syncConfig || {};
+    const syncBad = d.syncState && /fail/i.test(d.syncState);
+    const activityBad = d.activity && /fail/i.test(d.activity);
+    const fl = d.snapshotFlags || {};
+    const rows = [];
+    rows.push(`<tr><td>Sync enabled</td><td>${sc.enabled === true ? 'yes' : sc.enabled === false ? 'no' : '?'}${sc.target ? ' → ' + esc(String(sc.target)) : ''}${sc.intervalSeconds ? ' · every ' + sc.intervalSeconds + 's' : ''}</td></tr>`);
+    rows.push(`<tr><td>Activity</td><td class="${activityBad ? 'stor-err' : ''}">${esc(d.activity || '—')}</td></tr>`);
+    rows.push(`<tr><td>Sync state</td><td class="${syncBad ? 'stor-err' : ''}">${esc(d.syncState || '—')}${d.syncMessage ? ' · ' + esc(d.syncMessage) : ''}</td></tr>`);
+    if (fl.total != null) {
+      rows.push(`<tr><td>Snapshots</td><td>${fl.total} total · ${fl.shared} shared · <b>${fl.unshared} unshared</b> · <b>${fl.readOnly} read-only</b> · ${fl.deleted} deleted</td></tr>`);
+      if (fl.readOnly > 0) rows.push(`<tr><td>Read-only</td><td class="stor-anom">${esc(fl.readOnlySample.join(', '))}${fl.readOnly > fl.readOnlySample.length ? '…' : ''}</td></tr>`);
+      if (fl.unshared > 0) rows.push(`<tr><td>Unshared</td><td class="stor-anom">${esc(fl.unsharedSample.join(', '))}${fl.unshared > fl.unsharedSample.length ? '…' : ''}</td></tr>`);
+    }
+    if (d.tasks && d.tasks.length) {
+      d.tasks.forEach((t) => rows.push(`<tr><td>Task</td><td class="${/fail/i.test(t.state || '') ? 'stor-err' : ''}">${esc(t.name || '')}: ${esc(t.state || '')}${t.message ? ' · ' + esc(t.message) : ''}</td></tr>`));
+    }
+    box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div>
+      <table class="syncdiag-table"><tbody>${rows.join('')}</tbody></table>
+      <div class="inline" style="margin-top:8px">
+        <button class="btn sm ghost syncdiag-trigger">Trigger sync on this card</button>
+        <span class="muted syncdiag-trigmsg"></span>
+      </div>`;
+    box.querySelector('.syncdiag-trigger').addEventListener('click', async (ev) => {
+      const btn = ev.target; const msg = box.querySelector('.syncdiag-trigmsg');
+      btn.disabled = true; msg.textContent = 'Triggering…';
+      try {
+        const r = await fetch(`/api/admin/cards/${card.id}/sync-trigger`, { method: 'POST', headers: headers() }).then(x => x.json());
+        msg.textContent = r.ok ? `activity=${r.activity || '?'} · sync=${r.syncState || '?'}${r.syncMessage ? ' · ' + r.syncMessage : ''}` : `Error: ${r.error || 'failed'}`;
+      } catch (e) { msg.textContent = 'Error: ' + e.message; }
+      btn.disabled = false;
+      refreshLog();
+    });
+    refreshLog();
+  } catch (e) {
+    box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div><div class="stor-err">${esc(e.message)}</div>`;
+  }
+}
 
 // Auto-share is now edited inline: the Enabled toggle, interval, and card chips mutate
 // config.shareSweep directly, and the main "Save config" button persists it (its own Save

@@ -138,6 +138,19 @@ export async function getSnapshotInfo(ip) {
   });
 }
 
+// Board native card-to-card sync CONFIG (API 1.13: /v1/storage/sync). Separate from this
+// app's share-sweep — this is the board replicating shared snapshots to a target on its own.
+// { enabled, intervalSeconds, target }
+export async function getStorageSync(ip) {
+  return boardFetch(ip, '/storage/sync');
+}
+
+// Manually kick the board's native sync (API 1.13: POST /v1/storage/sync/trigger). Useful to
+// force a sync and then read /storage/status to see whether/why it failed.
+export async function triggerStorageSync(ip) {
+  return boardFetch(ip, '/storage/sync/trigger', { method: 'POST' });
+}
+
 // Board storage/activity status. API 1.13 moved the board's live activity + sync state here,
 // out of /v1/snapshots. Returns a normalised shape merging both firmware layouts:
 //   { activity, syncState, syncMessage, tasks }  (fields absent on a given firmware => null)
