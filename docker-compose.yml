@@ -15,6 +15,10 @@ services:
     environment:
       # Serve on the default HTTP port so the address needs no ":port" suffix.
       PORT: "80"
+      # Timezone for the scheduled backup and file timestamps. Set to YOUR IANA zone so the
+      # backup "time" field means local wall-clock time (e.g. 03:00 = 3 AM locally) rather
+      # than UTC. Without this the container runs in UTC. DST is handled automatically.
+      TZ: ${TZ:-America/New_York}
       # Admin access is a username/password stored (hashed) in config.json under
       # `admin: { user, passwordHash }`. Generate a hash with:
       #   node server/auth.js "yourpassword"

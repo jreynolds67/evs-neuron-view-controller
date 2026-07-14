@@ -53,10 +53,9 @@ async function loadConfig() {
     config.panelGroups ||= [];
     config.settings ||= { showUuids: true };
     config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
-    // backup is owned by its own tab/endpoint. Drop it from the held config so the main
-    // "Save" never round-trips a stale copy. shareSweep is now edited inline and saved WITH
-    // the main config (its standalone Save button was removed), so we keep it here.
-    delete config.backup;
+    config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30, configRetentionDays: 30 };
+    // backup and shareSweep are now edited inline on the Backups tab and saved WITH the main
+    // config (their standalone Save buttons were removed), so we keep them in the held config.
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();
     setLoadState('Loaded');
@@ -1427,8 +1426,9 @@ function fmtBytes(n) {
 
 async function refreshBackup() {
   try {
+    // Settings live in the held config now; only the file list + run status come from server.
     const data = await fetch('/api/admin/backup', { headers: headers() }).then(r => r.json());
-    const c = data.config || {};
+    const c = (config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30, configRetentionDays: 30 });
     $('bkEnabled').checked = !!c.enabled;
     $('bkTime').value = c.timeHHMM || '03:00';
     $('bkRetention').value = c.retentionCount || c.retentionDays || 30;
@@ -1441,6 +1441,17 @@ async function refreshBackup() {
     if (st.lastRun) $('bkState').textContent = `Last backup ${new Date(st.lastRun).toLocaleString()}` + (st.lastError ? ` · ${st.lastError}` : '');
   } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
 }
+
+// Backup form edits update the held config immediately (persisted on the main Save config).
+function wireBackupInputs() {
+  const c = () => (config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30, configRetentionDays: 30 });
+  $('bkEnabled').addEventListener('change', (e) => { c().enabled = e.target.checked; });
+  $('bkCard').addEventListener('change', (e) => { c().cardId = e.target.value; });
+  $('bkTime').addEventListener('input', (e) => { c().timeHHMM = e.target.value.trim(); });
+  $('bkRetention').addEventListener('input', (e) => { c().retentionCount = parseInt(e.target.value, 10) || 30; });
+  $('bkConfigDays').addEventListener('input', (e) => { c().configRetentionDays = parseInt(e.target.value, 10) || 30; });
+}
+wireBackupInputs();
 
 function renderBackupFiles(files) {
   const tb = $('bkFiles'); tb.innerHTML = '';
@@ -1502,38 +1513,13 @@ async function deleteBackup(file) {
   } catch (e) { $('bkState').textContent = 'Delete failed: ' + e.message; }
 }
 
-$('bkSave').addEventListener('click', async () => {
-  $('bkState').textContent = 'Saving…';
-  try {
-    const body = {
-      enabled: $('bkEnabled').checked,
-      cardId: $('bkCard').value,
-      timeHHMM: $('bkTime').value.trim(),
-      retentionCount: parseInt($('bkRetention').value, 10) || 30,
-      configRetentionDays: parseInt($('bkConfigDays').value, 10) || 30,
-    };
-    const r = await fetch('/api/admin/backup', { method: 'PUT', headers: headers(), body: JSON.stringify(body) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
-    $('bkState').textContent = 'Schedule saved';
-  } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
-});
-
 $('bkRun').addEventListener('click', async () => {
+  if (!config.backup || !config.backup.cardId) { $('bkState').textContent = 'Pick a board first.'; return; }
   $('bkState').textContent = 'Saving & backing up… (may take a moment)';
   try {
-    // Persist the current form selection FIRST, so the run uses exactly what's on screen
-    // (avoids "no target" when the user picked a card but hadn't saved the schedule).
-    const cfgBody = {
-      enabled: $('bkEnabled').checked,
-      cardId: $('bkCard').value,
-      timeHHMM: $('bkTime').value.trim() || '03:00',
-      retentionCount: parseInt($('bkRetention').value, 10) || 30,
-      configRetentionDays: parseInt($('bkConfigDays').value, 10) || 30,
-    };
-    if (!cfgBody.cardId) { $('bkState').textContent = 'Pick a board first.'; return; }
-    const put = await fetch('/api/admin/backup', { method: 'PUT', headers: headers(), body: JSON.stringify(cfgBody) });
-    if (!put.ok) throw new Error((await put.json().catch(() => ({}))).error || put.status);
-
+    // Persist current settings via the main config save so the run uses exactly what's on
+    // screen (backup settings are now part of the main config, no separate endpoint).
+    await saveConfig();
     const s = await fetch('/api/admin/backup/run', { method: 'POST', headers: headers() }).then(r => r.json());
     $('bkState').textContent = s.lastError ? `Error: ${s.lastError}` : `Wrote ${(s.lastFiles || []).length} file(s)`;
     // Refresh only the file list, not the whole form, so the selection is preserved.

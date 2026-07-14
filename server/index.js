@@ -569,16 +569,29 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
 
   // These sub-objects are owned separately from the main config page:
   //   admin   -> auth (login), never sent to or accepted from the client
-  //   backup  -> PUT /api/admin/backup (its own tab control)
-  // We ALWAYS take these from stored config and ignore whatever the client sent, so a stale
-  // page copy can't clobber a value changed via its own control.
+  // We ALWAYS take admin from stored config and ignore whatever the client sent.
   const existing = await loadConfig();
   if (existing.admin) next.admin = existing.admin; else delete next.admin;
-  if (existing.backup !== undefined) next.backup = existing.backup; else delete next.backup;
 
-  // shareSweep IS edited inline on this page now (its standalone Save button was removed), so
-  // it comes in with the main save. Normalise it and re-apply the sweep scheduler so the
-  // change takes effect immediately, the same way its dedicated endpoint used to.
+  // backup and shareSweep ARE edited inline on the Backups tab now (their standalone Save
+  // buttons were removed), so they arrive with the main save. Validate/normalise both, then
+  // re-apply their schedulers so changes take effect immediately.
+  if (next.backup && typeof next.backup === 'object') {
+    const b = next.backup;
+    const hhmm = /^\d{2}:\d{2}$/.test(b.timeHHMM) ? b.timeHHMM : '03:00';
+    next.backup = {
+      enabled: !!b.enabled,
+      cardId: typeof b.cardId === 'string' ? b.cardId : '',
+      timeHHMM: hhmm,
+      retentionCount: Math.max(1, Math.min(365, parseInt(b.retentionCount, 10) || parseInt(b.retentionDays, 10) || 30)),
+      configRetentionDays: Math.max(1, Math.min(365, parseInt(b.configRetentionDays, 10) || 30)),
+    };
+  } else if (existing.backup !== undefined) {
+    next.backup = existing.backup;
+  } else {
+    delete next.backup;
+  }
+
   if (next.shareSweep && typeof next.shareSweep === 'object') {
     next.shareSweep = {
       enabled: !!next.shareSweep.enabled,
@@ -593,6 +606,7 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
 
   await saveConfig(next);
   // Re-apply the sweep scheduler from the just-saved config so a change takes effect now.
+  // (The backup scheduler re-reads config every minute, so it needs no explicit reschedule.)
   if (next.shareSweep) { try { await applyShareSweepConfig(); } catch (e) { console.warn('[sharesweep] apply failed:', e.message); } }
   // Tell every connected panel to reload so config changes apply immediately.
   broadcastControl({ type: 'reload' });

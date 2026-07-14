@@ -280,10 +280,9 @@
         <div class="bk-controls">
           <label class="bk-field bk-check"><input type="checkbox" id="bkEnabled"> <span>Enabled</span></label>
           <div class="bk-field"><label class="muted">Board</label><select id="bkCard"></select></div>
-          <div class="bk-field"><label class="muted">Time (24h)</label><input id="bkTime" placeholder="03:00"></div>
+          <div class="bk-field"><label class="muted">Time (24h, local)</label><input id="bkTime" placeholder="03:00"></div>
           <div class="bk-field"><label class="muted">Keep (backups)</label><input id="bkRetention" type="number" min="1" max="365"></div>
           <div class="bk-field"><label class="muted">Config keep (days)</label><input id="bkConfigDays" type="number" min="1" max="365"></div>
-          <button class="btn sm" id="bkSave">Save schedule</button>
           <button class="btn sm ghost" id="bkRun">Back up now</button>
           <span class="muted bk-state" id="bkState"></span>
         </div>

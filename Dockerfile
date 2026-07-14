@@ -6,7 +6,10 @@ FROM node:20.19-alpine
 
 WORKDIR /app
 
-# Install deps first for better layer caching
+# Install deps first for better layer caching. tzdata lets TZ (e.g. America/New_York) resolve
+# to a real zone so the backup scheduler fires at LOCAL wall-clock time and file timestamps
+# read in local time — otherwise the container runs in UTC and "03:00" means 03:00 UTC.
+RUN apk add --no-cache tzdata
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 
