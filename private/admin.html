@@ -90,15 +90,17 @@
     .bk-controls #bkCard { min-width: 200px; }
     .bk-controls #bkTime { width: 90px; }
     .bk-controls #bkRetention { width: 110px; }
+    .bk-controls #bkConfigDays { width: 120px; }
     .bk-controls .btn.sm { min-height: 38px; display: inline-flex; align-items: center; }
     /* The Enabled checkbox aligns its box to the same control height as the inputs. */
     .bk-controls .bk-check { flex-direction: row; align-items: center; gap: 8px; min-height: 38px; cursor: pointer; font-size: 14px; }
     .bk-controls .bk-check input { width: 18px; height: 18px; margin: 0; }
     .bk-controls .bk-state { align-self: center; }
-    /* Backup file table: truncate long filenames, keep action buttons side by side. */
-    .bk-fname { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
-    .bk-actions { white-space: nowrap; text-align: right; }
-    .bk-actions .btn.sm { margin-left: 6px; }
+    /* Backup file table: one row per date, kind columns each with size + actions. */
+    .bk-date { font-size: 13px; color: var(--ink-dim); white-space: nowrap; }
+    .bk-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .bk-cell .bk-sz { font-size: 11px; min-width: 52px; }
+    .bk-cell .btn.sm { padding: 4px 8px; }
     .assigned-head .btn.sm { min-height: 34px; padding: 0 12px; }
     /* Per-card snapshot storage readout in the Setup card table. */
     .stor { display: flex; align-items: center; gap: 8px; }
@@ -278,7 +280,8 @@
           <label class="bk-field bk-check"><input type="checkbox" id="bkEnabled"> <span>Enabled</span></label>
           <div class="bk-field"><label class="muted">Board</label><select id="bkCard"></select></div>
           <div class="bk-field"><label class="muted">Time (24h)</label><input id="bkTime" placeholder="03:00"></div>
-          <div class="bk-field"><label class="muted">Retention (days)</label><input id="bkRetention" type="number" min="1" max="365"></div>
+          <div class="bk-field"><label class="muted">Keep (backups)</label><input id="bkRetention" type="number" min="1" max="365"></div>
+          <div class="bk-field"><label class="muted">Config keep (days)</label><input id="bkConfigDays" type="number" min="1" max="365"></div>
           <button class="btn sm" id="bkSave">Save schedule</button>
           <button class="btn sm ghost" id="bkRun">Back up now</button>
           <span class="muted bk-state" id="bkState"></span>
@@ -287,7 +290,7 @@
           <label class="muted">Available backups</label>
           <span class="muted" id="bkTotal"></span>
         </div>
-        <table style="margin-top:6px; table-layout:fixed; width:100%"><thead><tr><th>File</th><th style="width:100px">Size</th><th style="width:170px">Date</th><th style="width:180px"></th></tr></thead>
+        <table style="margin-top:6px; table-layout:fixed; width:100%"><thead><tr><th style="width:110px">Date</th><th>Full board</th><th>Snapshots (zip)</th><th>Config</th></tr></thead>
           <tbody id="bkFiles"></tbody></table>
       </div>
     </div>

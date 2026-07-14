@@ -189,6 +189,18 @@ app.get('/api/panel/me', async (req, res) => {
   });
 });
 
+// Scheduled-backup health for the operator banner. Returns the scheduled failure (or null)
+// ONLY for 1080-layout panels — strip/CTP panels never see the banner. Kept tiny so panels
+// can poll it cheaply alongside their preview polling.
+app.get('/api/panel/backup-status', async (req, res) => {
+  const config = await loadConfig();
+  const panel = getPanelByIp(config, clientIp(req));
+  if (!panel) return res.status(404).json({ error: 'Panel not registered' });
+  if ((panel.layout || '1080') !== '1080') return res.json({ failure: null });
+  const st = backupStatus();
+  res.json({ failure: st.scheduledFailure || null });
+});
+
 // Snapshots offered for a given card+head, honouring the admin filter.
 app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
@@ -640,16 +652,21 @@ app.get('/api/admin/backup', requireAdmin, async (_req, res) => {
 });
 
 app.put('/api/admin/backup', requireAdmin, async (req, res) => {
-  const { enabled, cardId, timeHHMM, retentionDays } = req.body || {};
+  const { enabled, cardId, timeHHMM, retentionCount, configRetentionDays } = req.body || {};
   if (timeHHMM && !/^\d{2}:\d{2}$/.test(timeHHMM)) {
     return res.status(400).json({ error: 'timeHHMM must be HH:MM' });
   }
   const config = await loadConfig();
+  const prev = config.backup || {};
   config.backup = {
     enabled: !!enabled,
     cardId: cardId || '',
     timeHHMM: timeHHMM || '03:00',
-    retentionDays: Math.max(1, Math.min(365, parseInt(retentionDays, 10) || 30)),
+    // Number of most-recent board backups (full archive + zip) to keep. Falls back to any
+    // legacy retentionDays value so existing configs migrate cleanly.
+    retentionCount: Math.max(1, Math.min(365, parseInt(retentionCount, 10) || prev.retentionCount || prev.retentionDays || 30)),
+    // Calendar-day window for the tiny config snapshots (kept independently of board count).
+    configRetentionDays: Math.max(1, Math.min(365, parseInt(configRetentionDays, 10) || prev.configRetentionDays || 30)),
   };
   await saveConfig(config);
   res.json({ ok: true, config: config.backup });

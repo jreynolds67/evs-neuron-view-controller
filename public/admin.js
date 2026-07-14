@@ -1344,7 +1344,8 @@ async function refreshBackup() {
     const c = data.config || {};
     $('bkEnabled').checked = !!c.enabled;
     $('bkTime').value = c.timeHHMM || '03:00';
-    $('bkRetention').value = c.retentionDays || 30;
+    $('bkRetention').value = c.retentionCount || c.retentionDays || 30;
+    $('bkConfigDays').value = c.configRetentionDays || 30;
     // Populate board dropdown from current cards.
     $('bkCard').innerHTML = '<option value="">— select —</option>' +
       config.cards.filter(x => x.id).map(x => `<option value="${esc(x.id)}"${x.id === c.cardId ? ' selected' : ''}>${esc(x.label || x.id)}</option>`).join('');
@@ -1364,16 +1365,39 @@ function renderBackupFiles(files) {
       : '';
   }
   if (!files.length) { tb.innerHTML = '<tr><td colspan="4" class="muted">No backups yet.</td></tr>'; return; }
-  files.forEach((f) => {
+
+  // Group files by their date key so each row is one nightly run, with the full-board
+  // archive, the snapshot zip, and the config snapshot in separate columns.
+  const byDate = new Map();
+  for (const f of files) {
+    const key = f.dateKey || (f.file.match(/^(\d{4}-\d{2}-\d{2})/) || [])[1] || f.file;
+    if (!byDate.has(key)) byDate.set(key, { date: key, board: null, zip: null, config: null, mtime: f.mtime });
+    const row = byDate.get(key);
+    if (f.kind === 'zip') row.zip = f;
+    else if (f.kind === 'config') row.config = f;
+    else row.board = f;
+    row.mtime = Math.max(row.mtime, f.mtime);
+  }
+  const rows = [...byDate.values()].sort((a, b) => b.mtime - a.mtime);
+
+  const cell = (f) => {
+    if (!f) return '<span class="muted">—</span>';
+    return `<div class="bk-cell">
+        <span class="bk-sz muted">${fmtBytes(f.bytes)}</span>
+        <a class="btn sm ghost" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download title="${esc(f.file)}">Download</a>
+        <button class="btn sm del" data-file="${esc(f.file)}">Delete</button>
+      </div>`;
+  };
+
+  rows.forEach((r) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="mono bk-fname" title="${esc(f.file)}">${esc(f.file)}</td>
-      <td>${fmtBytes(f.bytes)}</td>
-      <td>${new Date(f.mtime).toLocaleString()}</td>
-      <td class="bk-actions">
-        <a class="btn sm ghost bk-dl" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download>Download</a>
-        <button class="btn sm del bk-del">Delete</button>
-      </td>`;
-    tr.querySelector('.bk-del').addEventListener('click', () => deleteBackup(f.file));
+    tr.innerHTML = `<td class="bk-date">${esc(r.date)}</td>
+      <td>${cell(r.board)}</td>
+      <td>${cell(r.zip)}</td>
+      <td>${cell(r.config)}</td>`;
+    tr.querySelectorAll('.bk-del').forEach((btn) => {
+      btn.addEventListener('click', () => deleteBackup(btn.getAttribute('data-file')));
+    });
     tb.appendChild(tr);
   });
 }
@@ -1396,7 +1420,8 @@ $('bkSave').addEventListener('click', async () => {
       enabled: $('bkEnabled').checked,
       cardId: $('bkCard').value,
       timeHHMM: $('bkTime').value.trim(),
-      retentionDays: parseInt($('bkRetention').value, 10) || 30,
+      retentionCount: parseInt($('bkRetention').value, 10) || 30,
+      configRetentionDays: parseInt($('bkConfigDays').value, 10) || 30,
     };
     const r = await fetch('/api/admin/backup', { method: 'PUT', headers: headers(), body: JSON.stringify(body) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
@@ -1413,7 +1438,8 @@ $('bkRun').addEventListener('click', async () => {
       enabled: $('bkEnabled').checked,
       cardId: $('bkCard').value,
       timeHHMM: $('bkTime').value.trim() || '03:00',
-      retentionDays: parseInt($('bkRetention').value, 10) || 30,
+      retentionCount: parseInt($('bkRetention').value, 10) || 30,
+      configRetentionDays: parseInt($('bkConfigDays').value, 10) || 30,
     };
     if (!cfgBody.cardId) { $('bkState').textContent = 'Pick a board first.'; return; }
     const put = await fetch('/api/admin/backup', { method: 'PUT', headers: headers(), body: JSON.stringify(cfgBody) });

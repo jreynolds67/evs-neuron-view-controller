@@ -484,6 +484,47 @@ function restart() {
   renderHeads();
 }
 
+// ---- Scheduled-backup failure banner (1080 panels only) --------------------
+// Polls the server for the most recent SCHEDULED backup failure and shows a persistent,
+// dismissible banner. Dismiss is per-failure: we remember the dismissed failure's timestamp,
+// so a NEW failure (different `at`) re-shows, but the one the operator dismissed stays hidden.
+let bkBannerPollTimer = null;
+let bkDismissedAt = null;
+
+function bkFailureText(failure) {
+  const when = failure.at ? new Date(failure.at).toLocaleString() : 'recently';
+  if (failure.reason === 'empty') {
+    return `Scheduled snapshot backup at ${when} found no snapshots on the board to back up.`;
+  }
+  // export / target / generic error all read as a backup failure to the operator.
+  return `Scheduled snapshot backup failed at ${when}.`;
+}
+
+function renderBkBanner(failure) {
+  const el = $('bkBanner');
+  if (!el) return;
+  if (!failure || (bkDismissedAt !== null && failure.at === bkDismissedAt)) {
+    el.classList.remove('show');
+    return;
+  }
+  $('bkBannerMsg').textContent = bkFailureText(failure);
+  el.classList.add('show');
+  el._at = failure.at; // remember which failure is showing, so dismiss targets this one
+}
+
+async function pollBkBanner() {
+  try {
+    const { failure } = await api('/api/panel/backup-status');
+    renderBkBanner(failure);
+  } catch { /* leave current banner state on a transient poll failure */ }
+}
+
+function startBkBannerPolling() {
+  if (bkBannerPollTimer) return;
+  pollBkBanner(); // immediate first check
+  bkBannerPollTimer = setInterval(() => { if (!document.hidden) pollBkBanner(); }, 30000);
+}
+
 // ---- Live status ----------------------------------------------------------
 
 let previewPollTimer = null;   // interval that refreshes head previews on the heads view
@@ -743,6 +784,12 @@ async function boot() {
   $('fsClose').addEventListener('click', closeFullscreen);
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
+  $('bkBannerX').addEventListener('click', () => {
+    // Dismiss THIS failure only — record its timestamp so it stays hidden, but a later
+    // failure with a new timestamp will re-show.
+    bkDismissedAt = $('bkBanner')._at ?? null;
+    $('bkBanner').classList.remove('show');
+  });
 
   try {
     state.panel = await api('/api/panel/me');
@@ -751,6 +798,8 @@ async function boot() {
     $('panelLabel').textContent = state.panel.label || 'Neuron MV Control';
     $('panelSub').textContent = state.panel.ip;
     renderHeads();
+    // Backup-failure banner is a 1080-panel feature only.
+    if ((state.panel.layout || '1080') === '1080') startBkBannerPolling();
   } catch (e) {
     // Show the client IP even when unregistered — the server returns it in the error body,
     // which is the value to enter in the admin page. Helps troubleshooting.

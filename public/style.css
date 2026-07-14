@@ -215,6 +215,23 @@ body.strip .sheet .row .btn { min-height: 46px; }
 /* Toast rendered inside the fullscreen input editor — must sit above the overlay (z 80). */
 .fs-toast { z-index: 90; }
 
+/* Persistent backup-failure banner. Same size/format as a toast, but pinned at the top,
+   stays until dismissed, and carries an X. 1080 panels only (shown/hidden by JS). */
+.bkbanner {
+  position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
+  background: var(--panel-2); border: 1px solid var(--danger);
+  padding: 14px 20px; border-radius: 10px; font-size: 15px;
+  display: none; z-index: 70; max-width: 90vw;
+  align-items: center; gap: 16px;
+}
+.bkbanner.show { display: flex; }
+.bkbanner-msg { line-height: 1.3; }
+.bkbanner-x {
+  flex: none; background: transparent; border: none; color: var(--ink);
+  font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+.bkbanner-x:hover { background: rgba(255,255,255,0.08); }
+
 /* ---- Strip layout: 1835 x 291 ---- */
 body.strip .stage { padding: 6px 12px; }
 body.strip .stage-head { margin: 2px 0 8px; }

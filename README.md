@@ -285,7 +285,6 @@ networks:
 | `BOARD_SCHEME` | `https` | `http` or `https` for the board REST API. |
 | `BOARD_PORT` | (scheme default) | Override the board API port. |
 | `BOARD_TLS_REJECT_UNAUTHORIZED` | `false` | Set `true` only if boards present a CA-trusted cert (rare on broadcast gear). |
-| `BOARD_WS_SCHEME` / `BOARD_WS_PORT` | match API | Board WebSocket transport (currently unused; see notes). |
 | `TRUST_PROXY` | (off) | Set `1` **only** if a trusted reverse proxy sits in front and sets `X-Forwarded-For`. Off by default so the header can't be forged to impersonate a panel on a flat network. |
 
 ## Local development

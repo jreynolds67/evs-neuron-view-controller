@@ -5,32 +5,40 @@ services:
     # image: ghcr.io/<your-user>/neuron-mv-control:latest
     container_name: neuron-mv-control
     restart: unless-stopped
-    # Attached directly to the macvlan network below — the container has its own LAN IP
-    # (10.10.251.90) and is reached at that address on port 8080. No host port mapping is
-    # used on macvlan (the container isn't behind the host's network stack).
+    # Attached directly to the ipvlan/macvlan network below, so the container has its own LAN
+    # IP (10.10.251.90). Serving on port 80 means the app is reached at http://10.10.251.90
+    # (and the admin page at http://10.10.251.90/admin) with NO port number in the address.
+    # On ipvlan/macvlan the container owns its whole port range, so binding 80 is free.
     networks:
-      companion_companion_net:
+      neuron_net:
         ipv4_address: 10.10.251.90
     environment:
+      # Serve on the default HTTP port so the address needs no ":port" suffix.
+      PORT: "80"
       # Admin access is a username/password stored (hashed) in config.json under
       # `admin: { user, passwordHash }`. Generate a hash with:
       #   node server/auth.js "yourpassword"
-      PORT: "8080"
       CONFIG_PATH: /data/config.json
       # Board transport. Neuron boards use HTTPS with a self-signed cert by default.
       BOARD_SCHEME: ${BOARD_SCHEME:-https}
       # BOARD_PORT: "443"                 # override if the API is on a nonstandard port
-      # BOARD_WS_SCHEME: "wss"            # ws or wss; defaults to match BOARD_SCHEME
-      # BOARD_WS_PORT: ""                 # override if the board WS is on a specific port
       # Set to "true" only if boards present a CA-trusted cert (rare on broadcast gear).
       BOARD_TLS_REJECT_UNAUTHORIZED: ${BOARD_TLS_REJECT_UNAUTHORIZED:-false}
     volumes:
       - neuron_config:/data
 
 networks:
-  # Pre-existing macvlan created outside this stack; we attach to it rather than define it.
-  companion_companion_net:
+  # This app shares the same L2 segment as the Companion stack (same subnet + parent eth0),
+  # so it ATTACHES to that pre-existing network rather than defining a second one on the same
+  # subnet (two networks can't both own 10.10.251.0/24 on the same parent — they'd conflict).
+  #
+  # `name:` must match the ACTUAL Docker network name as Portainer created it. Portainer
+  # prefixes stack networks with the stack name, so the Companion stack's `companion_net`
+  # is typically stored as `companion_companion_net`. Confirm under Portainer -> Networks
+  # and set `name:` to whatever is listed there.
+  neuron_net:
     external: true
+    name: companion_companion_net
 
 volumes:
   neuron_config:

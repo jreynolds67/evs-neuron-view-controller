@@ -20,7 +20,14 @@ const BACKUP_DIR = process.env.BACKUP_DIR || '/data/backups';
 
 let timer = null;
 let backupRunning = false; // guards against concurrent runs (manual during scheduled, etc.)
-const status = { lastRun: null, lastError: null, lastFiles: [], nextCheck: null };
+const status = {
+  lastRun: null, lastError: null, lastFiles: [], nextCheck: null,
+  // Set ONLY by the scheduler (not manual runs) when a scheduled backup fails to produce a
+  // board archive. Drives the persistent banner on operator panels. Shape:
+  //   { at: <ms>, reason: 'export' | 'empty' | 'target' | 'error', message: <string> }
+  // Cleared to null when a scheduled run produces a board archive.
+  scheduledFailure: null,
+};
 
 async function ensureDir() {
   if (!existsSync(BACKUP_DIR)) await mkdir(BACKUP_DIR, { recursive: true });
@@ -78,6 +85,24 @@ export async function runBackupNow() {
 async function runBackupInternal() {
   await ensureDir();
   const config = await loadConfig();
+  const date = fileStamp();
+  const written = [];
+
+  // Write a dated copy of the app config FIRST, before any board contact or early exit.
+  // This is purely local and can't fail for board reasons, so it must not be gated behind a
+  // reachable board / non-empty snapshot list — on exactly the nights the board is down, a
+  // config restore point is the one thing we can still preserve. The admin password hash is
+  // stripped, since a backup file is precisely the thing that gets copied elsewhere.
+  try {
+    const { admin, ...safeConfig } = config;
+    const cfgBuf = Buffer.from(JSON.stringify(safeConfig, null, 2), 'utf8');
+    const cfgFile = `${date}__config.json`;
+    await writeAtomic(join(BACKUP_DIR, cfgFile), cfgBuf);
+    written.push({ file: cfgFile, bytes: cfgBuf.length });
+  } catch (e) {
+    console.log(`[backup] config copy step failed: ${e.message}`);
+  }
+
   const bcfg = config.backup || {};
   // The UI/endpoint stores the chosen board as `cardId`. Accept legacy `target` too.
   const sel = bcfg.cardId || bcfg.target || '';
@@ -87,11 +112,11 @@ async function runBackupInternal() {
   else if (sel && /\d+\.\d+\.\d+\.\d+/.test(sel)) { ip = sel; label = sel; }
   if (!ip) {
     status.lastError = 'No valid backup target configured';
+    status.lastRun = Date.now();
+    status.lastFiles = written.slice();
     return status;
   }
   label = safe(label);
-  const date = fileStamp();
-  const written = [];
 
   // Detect an export response that's actually JSON (error/manifest) rather than a real
   // snapshot archive, so we don't save a tiny bogus file and call it a backup.
@@ -122,7 +147,7 @@ async function runBackupInternal() {
     if (!allUuids.length) {
       status.lastRun = Date.now();
       status.lastError = 'No snapshots on the board to back up';
-      status.lastFiles = [];
+      status.lastFiles = written.slice(); // config copy was already written above
       return status;
     }
 
@@ -198,28 +223,30 @@ async function runBackupInternal() {
       }
     }
 
-    // Include a dated copy of the app config in every run, so a backup set is a COMPLETE
-    // restore point (board snapshots + all panel/head/filter definitions), not just board
-    // data. The admin password hash is stripped — a backup may be copied elsewhere and
-    // shouldn't carry the credential.
-    try {
-      const { admin, ...safeConfig } = config;
-      const cfgBuf = Buffer.from(JSON.stringify(safeConfig, null, 2), 'utf8');
-      const cfgFile = `${date}__config.json`;
-      await writeAtomic(join(BACKUP_DIR, cfgFile), cfgBuf);
-      written.push({ file: cfgFile, bytes: cfgBuf.length });
-    } catch (e) {
-      console.log(`[backup] config copy step failed: ${e.message}`);
-    }
-
     status.lastRun = Date.now();
     if (written.length) status.lastError = null;
     else if (!status.lastError) status.lastError = 'Export produced no valid files';
     status.lastFiles = written;
     console.log(`[backup] ${label} ${date}: wrote ${written.length} file(s)`);
-    await prune(config);
+
+    // Retention is gated on a SUCCESSFUL board backup today. Otherwise a board that stays
+    // down for longer than the retention window would age out every good board archive one
+    // by one until nothing is left — deleting the last valid backup while the board is still
+    // offline. So only prune when we actually produced a new board archive this run; the
+    // config copy alone does not count. (Config files are pruned as part of the same sweep,
+    // which is fine — they're only removed once there's a fresh successful run to age against.)
+    const boardFileWritten = written.some((f) => !f.file.endsWith('__config.json'));
+    if (boardFileWritten) {
+      try { await prune(config); } catch (e) { console.log(`[backup] prune failed: ${e.message}`); }
+    } else {
+      console.log('[backup] skipping retention prune — no valid board backup produced this run');
+    }
   } catch (e) {
     status.lastError = e.message;
+    status.lastRun = Date.now();
+    // The board part failed, but the config copy at the top succeeded — record it so the
+    // run still shows a restore point rather than looking like it produced nothing.
+    status.lastFiles = written.slice();
   }
   return status;
 }
@@ -235,17 +262,58 @@ async function writeAtomic(path, buf) {
 const BACKUP_RE = /^\d{4}-\d{2}-\d{2}(_\d{2}-\d{2}-\d{2})?__.+/;
 function isBackupFile(f) { return BACKUP_RE.test(f) && !f.endsWith('.tmp'); }
 
-// Delete backups older than retentionDays (by file mtime).
+// Classify a backup filename into a kind and its date key (the YYYY-MM-DD prefix).
+//   kind: 'config'  -> <date>__config.json           (app config snapshot)
+//         'zip'     -> <date>__<label>__individual.zip (per-snapshot bundle)
+//         'board'   -> everything else (the full-board archive, incl. per-folder fallbacks)
+// The date key groups all files produced by one nightly run together.
+function classifyBackup(f) {
+  const m = f.match(/^(\d{4}-\d{2}-\d{2})/);
+  const dateKey = m ? m[1] : '';
+  let kind = 'board';
+  if (f.endsWith('__config.json')) kind = 'config';
+  else if (f.endsWith('__individual.zip')) kind = 'zip';
+  return { kind, dateKey };
+}
+
+// Retention has two independent rules, by design (see the backup runner):
+//   * Board backups (full archive + its snapshot zip) are kept by COUNT: the N most recent
+//     backup DATES that produced a real board archive. Age is irrelevant, so a long board
+//     outage can't age out good backups — after recovery you still have N real ones.
+//   * Config snapshots are kept by CALENDAR AGE: the last configRetentionDays days. They're
+//     tiny and written even on board-down nights, so a simple age window suits them.
 async function prune(config) {
-  const days = (config.backup && config.backup.retentionDays) || 30;
-  const cutoff = Date.now() - days * 86400000;
+  const keepCount = (config.backup && config.backup.retentionCount)
+    || (config.backup && config.backup.retentionDays)   // legacy field name, same intent
+    || 30;
+  const configDays = (config.backup && config.backup.configRetentionDays) || 30;
+
   let files;
   try { files = await readdir(BACKUP_DIR); } catch { return; }
-  for (const f of files) {
-    if (!isBackupFile(f)) continue;
+  const backups = files.filter(isBackupFile);
+
+  // --- Board rule: keep the N most-recent dates that have a board archive ---
+  const boardDates = new Set();
+  for (const f of backups) {
+    const { kind, dateKey } = classifyBackup(f);
+    if (kind === 'board' && dateKey) boardDates.add(dateKey);
+  }
+  // Most recent first; keep the first keepCount dates, delete board+zip files of the rest.
+  const keptDates = new Set([...boardDates].sort().reverse().slice(0, keepCount));
+
+  // --- Config rule: keep the last configDays calendar days ---
+  const configCutoff = Date.now() - configDays * 86400000;
+
+  for (const f of backups) {
+    const { kind, dateKey } = classifyBackup(f);
     try {
-      const s = await stat(join(BACKUP_DIR, f));
-      if (s.mtimeMs < cutoff) { await unlink(join(BACKUP_DIR, f)); console.log(`[backup] pruned ${f}`); }
+      if (kind === 'config') {
+        const s = await stat(join(BACKUP_DIR, f));
+        if (s.mtimeMs < configCutoff) { await unlink(join(BACKUP_DIR, f)); console.log(`[backup] pruned (config age) ${f}`); }
+      } else {
+        // board or zip — governed by the kept-dates set
+        if (dateKey && !keptDates.has(dateKey)) { await unlink(join(BACKUP_DIR, f)); console.log(`[backup] pruned (retention count) ${f}`); }
+      }
     } catch {}
   }
 }
@@ -259,7 +327,8 @@ export async function listBackups() {
     if (!isBackupFile(f)) continue;
     try {
       const s = await stat(join(BACKUP_DIR, f));
-      out.push({ file: f, bytes: s.size, mtime: s.mtimeMs });
+      const { kind, dateKey } = classifyBackup(f);
+      out.push({ file: f, bytes: s.size, mtime: s.mtimeMs, kind, dateKey });
     } catch {}
   }
   return out.sort((a, b) => b.mtime - a.mtime);
@@ -301,7 +370,23 @@ export function startBackupScheduler() {
     if (nowMin >= target && lastRunDate !== dateStr) {
       lastRunDate = dateStr;
       console.log(`[backup] scheduled trigger (target ${bcfg.timeHHMM}, now ${p2(now)})`);
-      await runBackupNow();
+      const result = await runBackupNow();
+      // Classify the SCHEDULED outcome for the operator-panel banner. A board archive is any
+      // produced file that isn't the config snapshot. If one exists, the scheduled backup
+      // succeeded — clear any prior failure. Otherwise record why it failed so panels can
+      // show a specific message (empty board vs export failure).
+      const boardArchive = (result.lastFiles || []).some((f) => f.file && !f.file.endsWith('__config.json'));
+      if (boardArchive) {
+        status.scheduledFailure = null;
+      } else {
+        const err = result.lastError || 'Backup failed';
+        let reason = 'error';
+        if (/no snapshots/i.test(err)) reason = 'empty';
+        else if (/no valid backup target/i.test(err)) reason = 'target';
+        else if (/no valid files|returned JSON|export/i.test(err)) reason = 'export';
+        status.scheduledFailure = { at: Date.now(), reason, message: err };
+        console.warn(`[backup] scheduled backup FAILED (${reason}): ${err}`);
+      }
     }
   };
   timer = setInterval(tick, 60000);
