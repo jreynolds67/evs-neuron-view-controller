@@ -1025,6 +1025,98 @@ async function refreshAllHeadNames() {
 
 $('refreshAllNames').addEventListener('click', refreshAllHeadNames);
 
+// Re-link heads by NAME after a board software update. Updates regenerate every head's UUID
+// while KEEPING its name, which orphans all our UUID-keyed bindings at once. This repair
+// matches each stored head (by its cached boardName) to the live head of the same name and
+// rewrites the stored UUID everywhere it's referenced: the panel head assignment, the layout
+// grid slot, and the headFilters key. Names are reliably unique per card in this facility, so
+// a name match is safe; anything that can't be matched is left flagged so it's visible, never
+// silently guessed.
+async function relinkHeadsByName() {
+  const stateEl = $('refreshAllState');
+  const cardIds = [...new Set(
+    config.panels.flatMap((p) => (p.heads || []).map((h) => h.cardId))
+  )];
+  if (!cardIds.length) { stateEl.textContent = 'No assigned heads to re-link.'; return; }
+  if (!confirm('Re-link heads by name?\n\nThis rewrites stored head IDs to match the board\'s '
+    + 'current heads by name — use this after a board software update changed the head IDs. '
+    + 'Assignments, layout positions, and snapshot filters are preserved and moved to the new IDs.')) return;
+  stateEl.textContent = 'Re-linking…';
+
+  cardIds.forEach((id) => cardHeadsCache.delete(id));
+
+  // Build name -> newUuid per card from live heads.
+  const liveByCard = new Map();   // cardId -> Map(name -> uuid)
+  const failedCards = [];
+  for (const cardId of cardIds) {
+    try {
+      const heads = await probeCardHeads(cardId);
+      const byName = new Map();
+      for (const h of heads) if (h.name) byName.set(h.name, h.uuid);
+      liveByCard.set(cardId, byName);
+    } catch { failedCards.push(cardId); }
+  }
+
+  let relinked = 0, alreadyOk = 0, unmatched = 0;
+  const unmatchedDetail = [];
+
+  config.panels.forEach((p, pi) => {
+    (p.heads || []).forEach((h) => {
+      const byName = liveByCard.get(h.cardId);
+      if (!byName) return; // card unreachable — leave untouched
+
+      // Already valid? (UUID still live under this name) — nothing to do.
+      const liveUuidForName = h.boardName ? byName.get(h.boardName) : null;
+      if (liveUuidForName && liveUuidForName === h.headUuid) { delete h.missing; alreadyOk++; return; }
+
+      if (!h.boardName || !byName.has(h.boardName)) {
+        // No name to match on, or no live head with that name — cannot safely re-link.
+        h.missing = true; unmatched++;
+        unmatchedDetail.push(`${p.label || p.ip || `Panel ${pi + 1}`}: ${h.boardName || h.headUuid}`);
+        return;
+      }
+
+      const newUuid = byName.get(h.boardName);
+      const oldUuid = h.headUuid;
+      if (newUuid === oldUuid) { delete h.missing; alreadyOk++; return; }
+
+      // 1) Rewrite the panel head assignment.
+      h.headUuid = newUuid;
+      delete h.missing;
+
+      // 2) Rewrite the layout grid slot(s) on THIS panel that referenced the old UUID.
+      (p.layoutGrid || []).forEach((slot) => {
+        if (slot && slot.type === 'head' && slot.cardId === h.cardId && slot.headUuid === oldUuid) {
+          slot.headUuid = newUuid;
+        }
+      });
+
+      // 3) Re-key the global head filter, if one existed for the old UUID.
+      const oldKey = `${h.cardId}::${oldUuid}`;
+      const newKey = `${h.cardId}::${newUuid}`;
+      if (config.headFilters && Object.prototype.hasOwnProperty.call(config.headFilters, oldKey)) {
+        config.headFilters[newKey] = config.headFilters[oldKey];
+        delete config.headFilters[oldKey];
+      }
+
+      relinked++;
+    });
+  });
+
+  renderPanels();
+  if ($('hfCard').value) renderGlobalHeadFilters($('hfCard').value);
+
+  let msg = `Re-linked ${relinked} head${relinked === 1 ? '' : 's'}`;
+  if (alreadyOk) msg += `, ${alreadyOk} already current`;
+  if (unmatched) msg += `, ${unmatched} could not be matched by name (${unmatchedDetail.slice(0, 5).join('; ')}${unmatchedDetail.length > 5 ? '…' : ''})`;
+  if (failedCards.length) msg += `, ${failedCards.length} card${failedCards.length === 1 ? '' : 's'} unreachable`;
+  msg += '. Save config to keep.';
+  stateEl.textContent = msg;
+}
+
+const relinkBtn = $('relinkHeads');
+if (relinkBtn) relinkBtn.addEventListener('click', relinkHeadsByName);
+
 // ---- Global per-head snapshot filters -------------------------------------
 
 function renderHeadFilterCards() {
