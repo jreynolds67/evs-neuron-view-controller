@@ -121,6 +121,8 @@ export async function getSelf(ip) {
 export async function getSnapshotInfo(ip) {
   // Log a compact summary of the board's own reported figures — the numbers we're currently
   // seeing misbehave after the firmware update (odd storage totals, sync/state anomalies).
+  // Note: on API 1.13 `state`/`lastErrorMessage` moved OUT of this response to
+  // /v1/storage/status (see getStorageStatus); we still read storage bytes from here.
   return boardFetch(ip, '/snapshots', {
     diagnostic: (b) => {
       if (!b || typeof b !== 'object') return null;
@@ -128,10 +130,36 @@ export async function getSnapshotInfo(ip) {
       const total = Number(b.totalStorageBytes);
       const count = Array.isArray(b.snapshots) ? b.snapshots.length : '?';
       const mb = (n) => Number.isFinite(n) ? (n / 1048576).toFixed(1) + 'MB' : '?';
-      return `state=${b.state ?? '?'} · used=${mb(used)} · total=${mb(total)} · snapshots=${count}`
-        + (b.lastErrorMessage ? ` · lastError="${String(b.lastErrorMessage).slice(0, 80)}"` : '');
+      // state/lastErrorMessage exist on 1.10 only; include them when present.
+      const legacyState = b.state ? ` · state=${b.state}` : '';
+      const legacyErr = b.lastErrorMessage ? ` · lastError="${String(b.lastErrorMessage).slice(0, 80)}"` : '';
+      return `used=${mb(used)} · total=${mb(total)} · snapshots=${count}${legacyState}${legacyErr}`;
     },
   });
+}
+
+// Board storage/activity status. API 1.13 moved the board's live activity + sync state here,
+// out of /v1/snapshots. Returns a normalised shape merging both firmware layouts:
+//   { activity, syncState, syncMessage, tasks }  (fields absent on a given firmware => null)
+// On older firmware that lacks /v1/storage/status this 404s; callers treat that as "unknown".
+export async function getStorageStatus(ip) {
+  const s = await boardFetch(ip, '/storage/status', {
+    diagnostic: (b) => {
+      if (!b || typeof b !== 'object') return null;
+      const sync = b.sync || {};
+      const tasks = Array.isArray(b.tasks) ? b.tasks.length : 0;
+      return `activity=${b.activity ?? '?'} · sync=${sync.state ?? '?'}`
+        + (sync.message ? ` · syncMsg="${String(sync.message).slice(0, 80)}"` : '')
+        + ` · tasks=${tasks}`;
+    },
+  });
+  const sync = (s && s.sync) || {};
+  return {
+    activity: s?.activity ?? null,
+    syncState: sync.state ?? null,
+    syncMessage: sync.message ?? null,
+    tasks: Array.isArray(s?.tasks) ? s.tasks : [],
+  };
 }
 
 // The documented schema says /snapshots returns an array of UUID strings, but some
@@ -161,38 +189,88 @@ export function normalizeSnapshotEntry(entry) {
       // Last resort: scan all string values for something uuid-shaped.
       for (const v of Object.values(entry)) if (looksLikeUuid(v)) { uuid = v; break; }
     }
-    const hasMeta = 'name' in entry || 'description' in entry || 'timestamp' in entry;
+    const hasMeta = 'name' in entry || 'description' in entry
+      || 'timestamp' in entry || 'createdAt' in entry || 'updatedAt' in entry;
+
+    // Field renames across firmware (API 1.10 -> 1.13), handled compatibly so we work on both:
+    //   deleted (bool)        -> deletedAt (nullable timestamp; non-null = deleted)
+    //   timestamp (int)       -> createdAt / updatedAt (nullable ints)
+    // Canonical `deleted` is true if EITHER the old boolean is true OR the new deletedAt is a
+    // real (non-null) value. Canonical `timestamp` prefers the freshest available field.
+    const deleted = entry.deleted === true
+      || (entry.deletedAt !== undefined && entry.deletedAt !== null);
+    const timestamp = entry.timestamp
+      ?? entry.updatedAt ?? entry.createdAt ?? undefined;
+
     return {
       uuid,
       inlineMeta: hasMeta,
       name: entry.name,
       description: entry.description,
-      timestamp: entry.timestamp,
+      timestamp,
       path: entry.path,
-      deleted: entry.deleted,
+      deleted,
       shared: entry.shared,
+      readOnly: entry.readOnly === true, // new in 1.13; false/undefined on older firmware
+      // Preserve which LEGACY (1.10-only) fields the board actually sent, so a write-back
+      // (setSnapshotShared) can include them only when talking to older firmware and omit
+      // them on 1.13 (which no longer accepts them). Absent on 1.13 => omitted downstream.
+      _legacy: {
+        deleted: 'deleted' in entry ? entry.deleted : undefined,
+        timestamp: 'timestamp' in entry ? entry.timestamp : undefined,
+        type: 'type' in entry ? entry.type : undefined,
+      },
     };
   }
   return { uuid: null, inlineMeta: false };
 }
 
 export async function getSnapshotMeta(ip, uuid) {
-  return boardFetch(ip, `/snapshots/${uuid}`);
+  const m = await boardFetch(ip, `/snapshots/${uuid}`);
+  if (m && typeof m === 'object') {
+    // Canonical read fields (stable across API 1.10 -> 1.13), computed WITHOUT clobbering the
+    // originals, so the write path can still tell which legacy fields the board really sent:
+    //   timestamp <- timestamp | updatedAt | createdAt
+    //   deleted   <- deleted(bool) | (deletedAt != null)
+    const canonTimestamp = m.timestamp ?? m.updatedAt ?? m.createdAt ?? 0;
+    const canonDeleted = m.deleted === true
+      || (m.deletedAt !== undefined && m.deletedAt !== null);
+    m._legacy = {
+      deleted: 'deleted' in m ? m.deleted : undefined,
+      timestamp: 'timestamp' in m ? m.timestamp : undefined,
+      type: 'type' in m ? m.type : undefined,
+    };
+    m.timestamp = canonTimestamp; // canonical for readers
+    m.deleted = canonDeleted;     // canonical for readers
+  }
+  return m;
 }
 
-// Set a snapshot's `shared` flag. MetadataChange is a full-object PUT (all fields
-// required), so we take the current metadata and change only `shared`.
+// Set a snapshot's `shared` flag via a PUT to its metadata. The MetadataChange schema
+// changed across firmware:
+//   1.10 REQUIRED deleted, timestamp, type (plus the common fields)
+//   1.13 DROPPED deleted, timestamp, type (only description/name/path/shared/uuid required)
+// To work on both, we always send the fields 1.13 requires, and include the legacy fields
+// ONLY when the source snapshot actually carried them (true on 1.10, absent on 1.13). That
+// way a strict 1.13 board isn't sent fields it no longer recognises — a likely cause of the
+// post-upgrade share/sync failures — while a 1.10 board still gets its required fields.
 export async function setSnapshotShared(ip, snap, shared = true) {
   const change = {
-    deleted: snap.deleted === true ? true : false,
     description: snap.description || '',
     name: snap.name || '',
     path: snap.path || '',
     shared,
-    timestamp: snap.timestamp || Math.floor(Date.now() / 1000),
-    type: 'snapshot',
     uuid: snap.uuid,
   };
+  // Legacy 1.10-only fields: include only if the source metadata actually carried them. A
+  // normalized entry (or a getSnapshotMeta result) records original presence in `_legacy`;
+  // fall back to the object itself for anything constructed elsewhere. On 1.13 these are all
+  // undefined, so nothing legacy is sent.
+  const legacy = snap._legacy || snap;
+  if (legacy.deleted !== undefined) change.deleted = legacy.deleted === true;
+  if (legacy.timestamp !== undefined && legacy.timestamp !== null) change.timestamp = legacy.timestamp;
+  if (legacy.type !== undefined) change.type = legacy.type;
+
   return boardFetch(ip, `/snapshots/${snap.uuid}`, {
     method: 'PUT',
     body: JSON.stringify(change),

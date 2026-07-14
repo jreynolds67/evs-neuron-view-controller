@@ -12,7 +12,7 @@ import {
   getPanelHead, resolveAllowedSnapshots, getHeadFilter,
 } from './config.js';
 import {
-  getSelf, getSnapshotInfo, getSnapshotMeta, getHeads,
+  getSelf, getSnapshotInfo, getSnapshotMeta, getStorageStatus, getHeads,
   getSnapshotModel, extractSnapshotHeads, restorePartial,
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
@@ -774,14 +774,27 @@ app.get('/api/admin/cards/:cardId/storage', requireAdmin, async (req, res) => {
     const hasUsed = Number.isFinite(used);
     const hasTotal = Number.isFinite(boardTotal) && boardTotal > 0;
     const percent = (hasUsed && hasTotal) ? Math.round((used / boardTotal) * 100) : null;
+
+    // Board state: on API 1.10 it's on the /snapshots response (info.state); on 1.13 it moved
+    // to /v1/storage/status (activity + sync). Try the new endpoint; fall back to the legacy
+    // field. A 404 (older firmware without the endpoint) is fine — we just use info.state.
+    let activity = null, syncState = null, syncMessage = null;
+    try {
+      const st = await getStorageStatus(card.ip);
+      activity = st.activity; syncState = st.syncState; syncMessage = st.syncMessage;
+    } catch { /* endpoint absent on older firmware */ }
+    const legacyState = typeof info?.state === 'string' ? info.state : null;
+    const legacyErr = typeof info?.lastErrorMessage === 'string' && info.lastErrorMessage ? info.lastErrorMessage : null;
+
     res.json({
       ok: true,
       usedBytes: hasUsed ? used : null,
       totalBytes: hasTotal ? boardTotal : null,  // board-reported; null if not reported
       percent,                                     // null when total is unknown
-      // Surface the raw board state string too — useful now that the boards are misbehaving
-      // (e.g. 'syncing snapshots', 'not enough storage space').
-      state: typeof info?.state === 'string' ? info.state : null,
+      // Prefer the 1.13 activity/sync fields; fall back to the 1.10 state/error fields.
+      state: activity || legacyState,
+      syncState,
+      syncMessage: syncMessage || legacyErr,
     });
   } catch (e) {
     res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });

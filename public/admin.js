@@ -120,10 +120,14 @@ async function loadAllStorage() {
 
       const mb = (b) => (b / (1024 * 1024)).toFixed(1);
       const usedMB = d.usedBytes != null ? mb(d.usedBytes) : '?';
-      // Show the board's state when it's anything other than plain idle — highlights the
-      // odd post-firmware states (syncing, 'not enough storage space', etc.).
-      const stateNote = (d.state && d.state !== 'idle')
-        ? ` · <span class="stor-anom" title="Board state">${esc(d.state)}</span>` : '';
+      // Show the board's activity/state when it's anything other than plain idle, and flag a
+      // failed/active sync prominently (the post-firmware failures show up here).
+      const stateBad = d.state && /fail|error|not enough/i.test(d.state);
+      const syncBad = d.syncState && /fail/i.test(d.syncState);
+      const notes = [];
+      if (d.state && d.state !== 'idle') notes.push(`<span class="stor-anom" title="Board activity">${esc(d.state)}</span>`);
+      if (syncBad) notes.push(`<span class="stor-anom" title="${esc(d.syncMessage || 'sync failed')}">sync: ${esc(d.syncState)}</span>`);
+      const stateNote = notes.length ? ' · ' + notes.join(' · ') : '';
 
       if (d.percent != null && d.totalBytes != null) {
         // Board reported a usable total — show the bar + percentage against it.
