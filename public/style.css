@@ -137,6 +137,12 @@ body.strip .group-head { padding: 4px 2px 2px; font-size: 11px; }
 .preview-loading { color: var(--ink-faint); font-size: 12px; }
 .preview-note { font-size: 11px; color: var(--ink-dim); padding: 4px 8px; text-align: center; }
 .preview-note.err { color: var(--danger); }
+.preview-note.stale {
+  display: flex; flex-direction: column; gap: 4px; justify-content: center;
+  height: 100%; padding: 8px; color: var(--ink);
+}
+.preview-note.stale strong { color: var(--danger); font-size: 12px; }
+.preview-note.stale span { font-size: 10px; color: var(--ink-dim); line-height: 1.3; }
 
 /* ---- Footer action bar ---- */
 .actionbar {

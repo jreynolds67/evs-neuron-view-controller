@@ -318,7 +318,25 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
     const key = `${card.ip}::${req.params.headUuid}`;
     const widgets = await previewCache.get(key, () => getHeadWidgets(card.ip, req.params.headUuid));
     res.json({ widgets: (widgets || []).map(normalizeWidgetForPreview) });
-  } catch (e) { sendErr(res, e); }
+  } catch (e) {
+    // A board software update regenerates head UUIDs while keeping names, which orphans this
+    // panel's stored binding — the board then errors (often a 500) on the dead UUID. Detect
+    // that specific case by checking whether the requested head still exists live, and return
+    // a clear, actionable message instead of leaking a raw "IP/UUID -> 500". Any OTHER failure
+    // passes through unchanged so we don't mask real board problems.
+    try {
+      const live = await getHeads(card.ip);
+      const stillLive = (live || []).some((h) => h.uuid === req.params.headUuid);
+      if (!stillLive) {
+        return res.status(409).json({
+          error: 'This head’s ID changed on the board (usually after a board software update). '
+            + 'An administrator needs to re-link heads by name in the settings page.',
+          code: 'HEAD_STALE',
+        });
+      }
+    } catch { /* couldn't reach board to check — fall through to the original error */ }
+    sendErr(res, e);
+  }
 });
 
 // Extract an operator-facing input NUMBER from a group. Names typically embed a number
@@ -549,21 +567,33 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   if (dupIp) return res.status(400).json({ error: `Duplicate panel IP: "${dupIp}". Panel IPs must be unique.` });
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
 
-  // These sub-objects are owned by their own dedicated endpoints, not the main config page:
-  //   admin      -> auth (login), never sent to or accepted from the client
-  //   backup     -> PUT /api/admin/backup
-  //   shareSweep -> PUT /api/admin/sharesweep
-  // The admin page loads a full config copy at page-load and holds it; if the backup time
-  // (etc.) is later changed via its own control, the page's copy goes stale. Accepting
-  // those fields here would let a subsequent main "Save" clobber the newer values with the
-  // stale ones. So we ALWAYS take these three from stored config and ignore whatever the
-  // client sent for them.
+  // These sub-objects are owned separately from the main config page:
+  //   admin   -> auth (login), never sent to or accepted from the client
+  //   backup  -> PUT /api/admin/backup (its own tab control)
+  // We ALWAYS take these from stored config and ignore whatever the client sent, so a stale
+  // page copy can't clobber a value changed via its own control.
   const existing = await loadConfig();
   if (existing.admin) next.admin = existing.admin; else delete next.admin;
   if (existing.backup !== undefined) next.backup = existing.backup; else delete next.backup;
-  if (existing.shareSweep !== undefined) next.shareSweep = existing.shareSweep; else delete next.shareSweep;
+
+  // shareSweep IS edited inline on this page now (its standalone Save button was removed), so
+  // it comes in with the main save. Normalise it and re-apply the sweep scheduler so the
+  // change takes effect immediately, the same way its dedicated endpoint used to.
+  if (next.shareSweep && typeof next.shareSweep === 'object') {
+    next.shareSweep = {
+      enabled: !!next.shareSweep.enabled,
+      intervalSec: Math.max(10, Math.min(3600, parseInt(next.shareSweep.intervalSec, 10) || 60)),
+      targets: Array.isArray(next.shareSweep.targets) ? next.shareSweep.targets.filter((t) => typeof t === 'string') : [],
+    };
+  } else if (existing.shareSweep !== undefined) {
+    next.shareSweep = existing.shareSweep;
+  } else {
+    delete next.shareSweep;
+  }
 
   await saveConfig(next);
+  // Re-apply the sweep scheduler from the just-saved config so a change takes effect now.
+  if (next.shareSweep) { try { await applyShareSweepConfig(); } catch (e) { console.warn('[sharesweep] apply failed:', e.message); } }
   // Tell every connected panel to reload so config changes apply immediately.
   broadcastControl({ type: 'reload' });
   res.json({ ok: true });

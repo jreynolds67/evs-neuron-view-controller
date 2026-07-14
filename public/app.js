@@ -185,7 +185,22 @@ async function loadPreviewInto(container, url, { quiet = false } = {}) {
     // On a quiet refresh, keep the last good preview rather than replacing it with an error
     // (a transient poll failure shouldn't blank a working preview). Only surface errors on
     // an explicit load.
-    if (!quiet) container.innerHTML = `<div class="preview-note err">${e.message}</div>`;
+    if (!quiet) {
+      if (e.code === 'HEAD_STALE') {
+        // The head's board UUID changed (typically a board software update). Show a clear,
+        // non-technical explanation in the tile instead of a raw board error.
+        container.innerHTML = '<div class="preview-note stale">'
+          + '<strong>Head ID changed on the board</strong>'
+          + '<span>This usually happens after a board software update. '
+          + 'Ask an administrator to open Settings and use “Re-link heads by name.”</span>'
+          + '</div>';
+      } else {
+        const n = document.createElement('div');
+        n.className = 'preview-note err';
+        n.textContent = e.message;
+        container.replaceChildren(n);
+      }
+    }
   }
 }
 

@@ -52,10 +52,11 @@ async function loadConfig() {
     config.headFilters ||= {};
     config.panelGroups ||= [];
     config.settings ||= { showUuids: true };
-    // backup and shareSweep are owned by their own tabs/endpoints. Drop them from the held
-    // config so the main "Save" never round-trips a stale copy (the server ignores them
-    // too, but not sending them at all is the cleaner guard).
-    delete config.backup; delete config.shareSweep;
+    config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
+    // backup is owned by its own tab/endpoint. Drop it from the held config so the main
+    // "Save" never round-trips a stale copy. shareSweep is now edited inline and saved WITH
+    // the main config (its standalone Save button was removed), so we keep it here.
+    delete config.backup;
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();
     setLoadState('Loaded');
@@ -1361,17 +1362,16 @@ function renderReachRow() {
 
 // ---- Share sweep ----------------------------------------------------------
 
-let sweepCfg = { enabled: false, intervalSec: 60, targets: [] };
-
+// Auto-share is now edited inline: the Enabled toggle, interval, and card chips mutate
+// config.shareSweep directly, and the main "Save config" button persists it (its own Save
+// button was removed to avoid two confusing save buttons). "Run once now" stays as an action.
 async function refreshSweep() {
   try {
-    const [cfg, s] = await Promise.all([
-      fetch('/api/admin/sharesweep/config', { headers: headers() }).then(r => r.json()),
-      fetch('/api/admin/sharesweep', { headers: headers() }).then(r => r.json()),
-    ]);
-    sweepCfg = { enabled: !!cfg.enabled, intervalSec: cfg.intervalSec || 60, targets: Array.isArray(cfg.targets) ? cfg.targets : [] };
-    $('swEnabled').checked = sweepCfg.enabled;
-    $('swInterval').value = sweepCfg.intervalSec;
+    // Only the live status comes from the server now; the settings live in the held config.
+    const s = await fetch('/api/admin/sharesweep', { headers: headers() }).then(r => r.json());
+    config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
+    $('swEnabled').checked = !!config.shareSweep.enabled;
+    $('swInterval').value = config.shareSweep.intervalSec || 60;
     renderSweepCards();
     const when = s.lastRun ? new Date(s.lastRun).toLocaleTimeString() : 'never';
     $('sweepState').textContent = `Last run ${when}` + (s.lastError ? ` · ${s.lastError}` : ` · shared ${s.shared || 0}, checked ${s.checked || 0}`);
@@ -1382,36 +1382,31 @@ async function refreshSweep() {
 // chip being on; toggling any off makes the set explicit.
 function renderSweepCards() {
   const host = $('swCards'); host.innerHTML = '';
-  const allSelected = sweepCfg.targets.length === 0;
+  const sw = (config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] });
+  const allSelected = (sw.targets || []).length === 0;
   config.cards.filter(c => c.id).forEach((c) => {
-    const on = allSelected || sweepCfg.targets.includes(c.id);
+    const on = allSelected || sw.targets.includes(c.id);
     const chip = document.createElement('button');
     chip.className = 'chip' + (on ? ' on' : '');
     chip.textContent = c.label || c.id;
     chip.addEventListener('click', () => {
       // Materialize "all" into an explicit list on first toggle.
-      let list = sweepCfg.targets.length ? [...sweepCfg.targets]
+      let list = (sw.targets || []).length ? [...sw.targets]
         : config.cards.filter(x => x.id).map(x => x.id);
       if (list.includes(c.id)) list = list.filter(x => x !== c.id); else list.push(c.id);
-      sweepCfg.targets = list;
+      sw.targets = list;
       renderSweepCards();
     });
     host.appendChild(chip);
   });
 }
 
-$('swSave').addEventListener('click', async () => {
-  $('sweepState').textContent = 'Saving…';
-  try {
-    const body = {
-      enabled: $('swEnabled').checked,
-      intervalSec: parseInt($('swInterval').value, 10) || 60,
-      targets: sweepCfg.targets,
-    };
-    const r = await fetch('/api/admin/sharesweep', { method: 'PUT', headers: headers(), body: JSON.stringify(body) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
-    $('sweepState').textContent = 'Saved' + (body.enabled ? ` · sweeping every ${body.intervalSec}s` : ' · disabled');
-  } catch (e) { $('sweepState').textContent = 'Error: ' + e.message; }
+// Enabled / interval edits update the held config immediately (persisted on main Save).
+$('swEnabled').addEventListener('change', (e) => {
+  (config.shareSweep ||= {}).enabled = e.target.checked;
+});
+$('swInterval').addEventListener('input', (e) => {
+  (config.shareSweep ||= {}).intervalSec = parseInt(e.target.value, 10) || 60;
 });
 
 $('swRun').addEventListener('click', async () => {
@@ -1456,7 +1451,7 @@ function renderBackupFiles(files) {
       ? `${files.length} file${files.length === 1 ? '' : 's'} · ${fmtBytes(total)} used on server`
       : '';
   }
-  if (!files.length) { tb.innerHTML = '<tr><td colspan="4" class="muted">No backups yet.</td></tr>'; return; }
+  if (!files.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">No backups yet.</td></tr>'; return; }
 
   // Group files by their date key so each row is one nightly run, with the full-board
   // archive, the snapshot zip, and the config snapshot in separate columns.
@@ -1483,7 +1478,9 @@ function renderBackupFiles(files) {
 
   rows.forEach((r) => {
     const tr = document.createElement('tr');
+    const time = r.mtime ? new Date(r.mtime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
     tr.innerHTML = `<td class="bk-date">${esc(r.date)}</td>
+      <td class="bk-time">${time}</td>
       <td>${cell(r.board)}</td>
       <td>${cell(r.zip)}</td>
       <td>${cell(r.config)}</td>`;
