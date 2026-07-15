@@ -18,6 +18,7 @@ import {
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
   getInputGroups, setWidgetGroup, setWidgetGeometry,
+  moveHeadWidgetOrder, setHeadWidgetOrder,
 } from './board.js';
 import { getEntries, clear as clearLog, log } from './logger.js';
 import { startShareSweep, shareSweepStatus, runShareSweepNow, applyShareSweepConfig } from './sharesweep.js';
@@ -992,6 +993,32 @@ app.post('/api/admin/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/geometry'
   }
   try {
     const out = await setWidgetGeometry(card.ip, req.params.headUuid, req.params.widgetUuid, geometry);
+    res.json({ ok: true, ...out });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Move one widget to the front (end of list) or back (start) — tests whether the head's widget
+// array order drives z-order. Returns previousOrder so the UI can restore it.
+app.post('/api/admin/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/order', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const position = (req.body && req.body.position) === 'back' ? 'back' : 'front';
+  try {
+    const out = await moveHeadWidgetOrder(card.ip, req.params.headUuid, req.params.widgetUuid, position);
+    res.json({ ok: true, position, ...out });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Restore an exact widget order (undo the reorder test). Body: { widgets: [uuid, ...] }.
+app.post('/api/admin/cards/:cardId/heads/:headUuid/order', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const widgets = (req.body && Array.isArray(req.body.widgets)) ? req.body.widgets : null;
+  if (!widgets) return res.status(400).json({ error: 'widgets[] (ordered UUID list) is required' });
+  try {
+    const out = await setHeadWidgetOrder(card.ip, req.params.headUuid, widgets);
     res.json({ ok: true, ...out });
   } catch (e) { sendErr(res, e); }
 });

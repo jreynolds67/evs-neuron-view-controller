@@ -504,6 +504,66 @@ export async function setWidgetGeometry(ip, headUuid, widgetUuid, geometry) {
   return { previous, applied: geometry, result };
 }
 
+// One head's full definition (HeadGet), including its ordered `widgets` UUID list — the only
+// z-order lever the API exposes.
+export async function getHead(ip, headUuid) {
+  return boardFetch(ip, `/heads/${headUuid}`);
+}
+
+// Build a HeadChange from a HeadGet with a replacement widget order, preserving every other
+// head field (HeadChange = HeadGet minus uuid). Internal helper for the reorder calls below.
+function headChangeWithOrder(head, orderedUuids) {
+  return {
+    backgroundColor: head.backgroundColor,
+    backgroundMode: head.backgroundMode,
+    colorSpace: head.colorSpace,
+    height: head.height,
+    name: head.name,
+    widgets: orderedUuids,
+    width: head.width,
+    x: head.x,
+    y: head.y,
+  };
+}
+
+// Move ONE widget to the end ('front') or start ('back') of a head's widget list, to test
+// whether array order drives paint/z-order. Read-modify-write on the head; returns the
+// previous and new order so the caller can restore it exactly. Part of the geometry PROBE.
+export async function moveHeadWidgetOrder(ip, headUuid, widgetUuid, position) {
+  const head = await getHead(ip, headUuid);
+  const order = Array.isArray(head.widgets) ? head.widgets.slice() : [];
+  const idx = order.indexOf(widgetUuid);
+  if (idx < 0) {
+    const err = new Error(`Widget ${widgetUuid} is not in head ${headUuid}'s widget list`);
+    err.status = 404;
+    throw err;
+  }
+  const previousOrder = order.slice();
+  order.splice(idx, 1);
+  if (position === 'back') order.unshift(widgetUuid); else order.push(widgetUuid); // 'front' = end
+  const result = await boardFetch(ip, `/heads/${headUuid}`, {
+    method: 'PUT', body: JSON.stringify(headChangeWithOrder(head, order)),
+  });
+  log({
+    ip, method: 'ORDER', path: `/heads/${headUuid}`, status: null, ok: true,
+    detail: `moved widget to ${position === 'back' ? 'start' : 'end'} of ${order.length}-widget list`,
+  });
+  return { previousOrder, newOrder: order, result };
+}
+
+// Restore an exact widget order (undo a reorder test). Read-modify-write on the head.
+export async function setHeadWidgetOrder(ip, headUuid, orderedUuids) {
+  const head = await getHead(ip, headUuid);
+  const result = await boardFetch(ip, `/heads/${headUuid}`, {
+    method: 'PUT', body: JSON.stringify(headChangeWithOrder(head, orderedUuids)),
+  });
+  log({
+    ip, method: 'ORDER', path: `/heads/${headUuid}`, status: null, ok: true,
+    detail: `restored widget order (${orderedUuids.length} widgets)`,
+  });
+  return { result };
+}
+
 // Reduce a raw widget (WidgetGet) to the minimal shape the preview renderer needs:
 // its geometry, and its elements' geometry + type + a couple of display hints. Keeps
 // the payload small and hides board internals from the browser.

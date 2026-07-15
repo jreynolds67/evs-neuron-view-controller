@@ -1149,6 +1149,8 @@ const gpCardSel = $('gpCard');
 if (gpCardSel) gpCardSel.addEventListener('change', gpLoadHeads);
 const gpLoadBtn = $('gpLoad');
 if (gpLoadBtn) gpLoadBtn.addEventListener('click', gpLoadWidgets);
+const gpRestoreOrderBtn = $('gpRestoreOrder');
+if (gpRestoreOrderBtn) gpRestoreOrderBtn.addEventListener('click', gpRestoreOrder);
 
 // ---- Global per-head snapshot filters -------------------------------------
 
@@ -1471,7 +1473,8 @@ async function runSyncDiag(card, append = false) {
 // Fully reversible read-modify-write on one widget's geometry, to learn whether the board
 // accepts fullscreen/overlapping/off-canvas geometry the native GUI blocks. Per-widget captured
 // "original" geometry (gpSaved) drives the Restore button. Nothing is persisted to config.
-const gpSaved = new Map(); // widgetUuid -> previous geometry captured on first apply
+const gpSaved = new Map();       // widgetUuid -> previous geometry captured on first apply
+const gpSavedOrder = new Map();  // headUuid   -> original widget order captured on first reorder
 
 function renderGeomProbeCards() {
   const sel = $('gpCard'); if (!sel) return;
@@ -1486,6 +1489,7 @@ async function gpLoadHeads() {
   const cardId = $('gpCard').value;
   const headSel = $('gpHead');
   $('gpWidgets').innerHTML = ''; $('gpState').textContent = '';
+  const ro = $('gpRestoreOrder'); if (ro) ro.disabled = true;
   headSel.innerHTML = '<option value="">— select a head —</option>';
   if (!cardId) return;
   headSel.innerHTML = '<option value="">Loading…</option>';
@@ -1514,6 +1518,7 @@ async function gpLoadWidgets() {
       `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets`,
       { headers: headers() }).then((r) => r.json());
     if (!Array.isArray(widgets)) throw new Error(widgets.error || 'Failed to load widgets');
+    const ro = $('gpRestoreOrder'); if (ro) ro.disabled = !gpSavedOrder.has(headUuid);
     $('gpState').textContent = `${widgets.length} widget(s) — changes are live and reversible`;
     if (!widgets.length) { host.innerHTML = '<div class="muted">No widgets on this head.</div>'; return; }
     widgets.forEach((w) => host.appendChild(gpWidgetRow(cardId, headUuid, w)));
@@ -1528,7 +1533,7 @@ function gpWidgetRow(cardId, headUuid, w) {
     <div class="muted mono" style="font-size:12px">current: <span class="gp-cur"></span></div>
     <div class="inline" style="gap:6px; margin-top:8px; flex-wrap:wrap">
       <button class="btn sm ghost gp-full">Set fullscreen (0,0,1,1)</button>
-      <button class="btn sm ghost gp-restore" disabled>Restore</button>
+      <button class="btn sm ghost gp-restore" disabled>Restore size</button>
       <span class="inline" style="gap:4px; align-items:center">
         <span class="muted" style="font-size:12px">custom:</span>
         <input class="gp-x" style="width:56px" placeholder="x" inputmode="decimal">
@@ -1537,6 +1542,11 @@ function gpWidgetRow(cardId, headUuid, w) {
         <input class="gp-h" style="width:56px" placeholder="h" inputmode="decimal">
         <button class="btn sm ghost gp-apply">Apply</button>
       </span>
+    </div>
+    <div class="inline" style="gap:6px; margin-top:6px; flex-wrap:wrap">
+      <span class="muted" style="font-size:12px">z-order:</span>
+      <button class="btn sm ghost gp-front">Bring to front (end of list)</button>
+      <button class="btn sm ghost gp-back">Send to back (start of list)</button>
     </div>
     <div class="mono gp-out" style="font-size:12px; margin-top:6px; color:var(--ink-dim); word-break:break-word"></div>`;
   const out = box.querySelector('.gp-out');
@@ -1586,7 +1596,51 @@ function gpWidgetRow(cardId, headUuid, w) {
     const okDone = await apply(prev, 'restore');
     if (okDone) { gpSaved.delete(w.uuid); restoreBtn.disabled = true; }
   });
+
+  const reorder = async (position) => {
+    const label = position === 'front' ? 'bring to front' : 'send to back';
+    out.textContent = `Reordering (${label})…`;
+    try {
+      const r = await fetch(
+        `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets/${encodeURIComponent(w.uuid)}/order`,
+        { method: 'POST', headers: headers(), body: JSON.stringify({ position }) });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        out.innerHTML = `<span class="stor-err">REJECTED — HTTP ${r.status}: ${esc(body.error || 'failed')}`
+          + `${body.detail ? ' · ' + esc(String(body.detail)) : ''}</span>`;
+        refreshLog();
+        return;
+      }
+      // Capture the original order the FIRST time this head is reordered, for exact restore.
+      if (body.previousOrder && !gpSavedOrder.has(headUuid)) gpSavedOrder.set(headUuid, body.previousOrder);
+      const ro = $('gpRestoreOrder'); if (ro) ro.disabled = !gpSavedOrder.has(headUuid);
+      out.innerHTML = `<span style="color:var(--fire)">ACCEPTED — HTTP ${r.status}, moved to ${position === 'front' ? 'end (front)' : 'start (back)'} of the list. `
+        + `Check the wall: did this window's depth change as expected?</span>`;
+      refreshLog();
+    } catch (e) { out.innerHTML = `<span class="stor-err">${esc(e.message)}</span>`; }
+  };
+  box.querySelector('.gp-front').addEventListener('click', () => reorder('front'));
+  box.querySelector('.gp-back').addEventListener('click', () => reorder('back'));
   return box;
+}
+
+// Restore a head's original widget z-order captured on the first reorder in this session.
+async function gpRestoreOrder() {
+  const headUuid = $('gpHead').value;
+  const order = gpSavedOrder.get(headUuid);
+  if (!headUuid || !order) return;
+  const cardId = $('gpCard').value;
+  $('gpState').textContent = 'Restoring original z-order…';
+  try {
+    const r = await fetch(`/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/order`,
+      { method: 'POST', headers: headers(), body: JSON.stringify({ widgets: order }) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { $('gpState').textContent = `Restore failed: ${body.error || r.status}`; refreshLog(); return; }
+    gpSavedOrder.delete(headUuid);
+    $('gpRestoreOrder').disabled = true;
+    $('gpState').textContent = 'Original z-order restored.';
+    refreshLog();
+  } catch (e) { $('gpState').textContent = 'Error: ' + e.message; }
 }
 
 // Auto-share is now edited inline: the Enabled toggle, interval, and card chips mutate
