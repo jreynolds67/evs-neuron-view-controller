@@ -474,8 +474,11 @@ async function fire() {
     state.head = state.snap = state.srcHead = null;
     renderHeads();
   } catch (e) {
-    if (e.code === 'BOARD_BUSY') {
-      // Board mid-operation — safe to retry shortly, nothing was applied.
+    if (e.code === 'BOARD_BUSY' || e.code === 'HEAD_STALE') {
+      // Both are clean failures where nothing was applied: BOARD_BUSY means the board was
+      // mid-operation (safe to retry shortly); HEAD_STALE means the target head's ID drifted
+      // and the board rejected an unknown head. Show the clear message without the "may have
+      // partially applied" warning, which only fits an ambiguous mid-restore error.
       toast(e.message, 'err');
     } else {
       // Any other failure: the restore MAY have partially applied on the board, so tell the

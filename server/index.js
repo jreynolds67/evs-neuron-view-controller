@@ -331,9 +331,41 @@ app.get('/api/panel/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) =
 const PREVIEW_TTL_MS = 3500;
 const GROUPS_TTL_MS = 3500;
 const NEG_TTL_MS = 5000; // brief failure caching so a down board isn't re-hit every poll
+// The live head roster of a card, cached for the HEAD_STALE probe below. It changes rarely
+// (only when heads are reconfigured on the board), so a longer TTL is fine and further cuts
+// board load. The negative window is the important part: it stops a card that's answering
+// with HTTP errors from getting an uncached, full-timeout getHeads on EVERY poll/attempt.
+const HEADS_TTL_MS = 10000;
 const previewCache = createTtlCache(PREVIEW_TTL_MS, { negativeTtlMs: NEG_TTL_MS });
 const groupsCache = createTtlCache(GROUPS_TTL_MS, { negativeTtlMs: NEG_TTL_MS });
-setInterval(() => { previewCache.prune(30000); groupsCache.prune(30000); }, 30000).unref?.();
+const headsCache = createTtlCache(HEADS_TTL_MS, { negativeTtlMs: NEG_TTL_MS });
+setInterval(() => { previewCache.prune(30000); groupsCache.prune(30000); headsCache.prune(30000); }, 30000).unref?.();
+
+// A board software update regenerates head UUIDs while keeping names, which orphans a panel's
+// stored binding — the board then errors (often a 500) on the dead UUID. After such a failure,
+// this decides whether the head is genuinely GONE (=> surface HEAD_STALE and tell the admin to
+// re-link) versus a transient/transport problem we shouldn't mislabel.
+//
+// Only probe when the board actually ANSWERED with an HTTP error (err.status set, err.code
+// absent). A transport failure sets err.code (ECONNREFUSED/ETIMEDOUT/…) and means the board is
+// unreachable — the head might be perfectly valid, so we must NOT claim it's stale. The probe
+// goes through headsCache so N panels polling a faulting card collapse into one getHeads per
+// TTL (and one per negative window while it keeps failing) instead of one per request.
+const HEAD_STALE_MESSAGE =
+  'This head’s ID changed on the board (usually after a board software update). '
+  + 'An administrator needs to re-link heads by name in the settings page.';
+async function headIsStale(cardIp, headUuid, err) {
+  if (err && err.code) return false; // transport failure — can't tell; don't claim stale
+  try {
+    const live = await headsCache.get(cardIp, () => getHeads(cardIp));
+    return !(live || []).some((h) => h.uuid === headUuid);
+  } catch {
+    return false; // couldn't reach the board to check — let the original error surface
+  }
+}
+function sendHeadStale(res) {
+  return res.status(409).json({ error: HEAD_STALE_MESSAGE, code: 'HEAD_STALE' });
+}
 
 app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
@@ -344,29 +376,11 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
     const widgets = await previewCache.get(key, () => getHeadWidgets(card.ip, req.params.headUuid));
     res.json({ widgets: (widgets || []).map(normalizeWidgetForPreview) });
   } catch (e) {
-    // A board software update regenerates head UUIDs while keeping names, which orphans this
-    // panel's stored binding — the board then errors (often a 500) on the dead UUID. Detect
-    // that specific case by checking whether the requested head still exists live, and return
-    // a clear, actionable message instead of leaking a raw "IP/UUID -> 500". Any OTHER failure
-    // passes through unchanged so we don't mask real board problems.
-    //
-    // Only run this probe when the board actually ANSWERED with an HTTP error (e.status set,
-    // e.code absent — e.g. a 500 on the dead UUID). A transport failure sets e.code
-    // (ECONNREFUSED/ETIMEDOUT/…) and means the board is unreachable: the probe can't succeed
-    // and would fire another uncached, full-timeout getHeads on EVERY poll, defeating the
-    // negative cache and hammering a board that's already down. Skip it in that case.
-    try {
-      if (e.code) throw e; // transport failure — don't probe a dead board
-      const live = await getHeads(card.ip);
-      const stillLive = (live || []).some((h) => h.uuid === req.params.headUuid);
-      if (!stillLive) {
-        return res.status(409).json({
-          error: 'This head’s ID changed on the board (usually after a board software update). '
-            + 'An administrator needs to re-link heads by name in the settings page.',
-          code: 'HEAD_STALE',
-        });
-      }
-    } catch { /* couldn't reach board to check — fall through to the original error */ }
+    // If the head's board UUID drifted (typically a board software update), return a clear,
+    // actionable message instead of leaking a raw "IP/UUID -> 500". headIsStale() only probes
+    // on a real HTTP error and caches the getHeads result, so a faulting board isn't hammered
+    // with an uncached probe on every poll. Any other failure passes through unchanged.
+    if (await headIsStale(card.ip, req.params.headUuid, e)) return sendHeadStale(res);
     sendPanelErr(res, e);
   }
 });
@@ -529,7 +543,14 @@ app.post('/api/panel/cards/:cardId/snapshots/:snapUuid/restore', async (req, res
     // content on their next poll instead of a stale copy.
     previewCache.invalidate(`${card.ip}::${targetHeadUuid}`);
     res.json({ ok: true, result });
-  } catch (e) { sendPanelErr(res, e); }
+  } catch (e) {
+    // Same UUID-drift case the preview endpoint handles: if the target head's ID changed on the
+    // board, the restore fails on the dead UUID. Surface the clear "re-link heads" message
+    // rather than the generic board error — and nothing was applied (the board rejected an
+    // unknown head), so this is a clean failure the operator can act on directly.
+    if (await headIsStale(card.ip, targetHeadUuid, e)) return sendHeadStale(res);
+    sendPanelErr(res, e);
+  }
 });
 
 // --- admin auth ------------------------------------------------------------
