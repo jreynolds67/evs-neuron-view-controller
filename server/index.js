@@ -364,13 +364,20 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
   }
 });
 
-// Board activity states that genuinely CONFLICT with a restore. Deliberately an explicit set,
-// not a regex: 1.13's activity enum also contains terminal failure states (sync-failed,
-// import-failed, load-failed, …) which are NOT "busy" — a substring match on "sync"/"import"
-// would block restores indefinitely after any failure until the board cleared it.
+// Board activity states that genuinely CONFLICT with a restore: writes to the storage layer
+// and sync. Deliberately an explicit set, not a regex, for two reasons:
+//
+//  1. 1.13's activity enum also contains TERMINAL failure states (sync-failed, import-failed,
+//     load-failed, …) which are not "busy" — a substring match on "sync"/"import" would block
+//     restores indefinitely after any failure until the board cleared it.
+//  2. READ activities (loading-files, getting-file-preview) are deliberately EXCLUDED. They
+//     don't conflict with a restore, and this app causes them itself: GET /snapshots/{uuid}/model
+//     IS the get-file-preview operation, and panels fetch it while browsing source heads. If a
+//     read state counted as busy, one operator browsing a snapshot on a card could 409 another
+//     operator's Load on that same card — a spurious failure for a non-conflicting operation.
 const BUSY_ACTIVITIES = new Set([
-  'loading-files', 'getting-file-preview', 'creating-file', 'updating-file',
-  'deleting-file', 'exporting-files', 'importing-file', 'syncing',
+  'creating-file', 'updating-file', 'deleting-file',
+  'exporting-files', 'importing-file', 'syncing',
 ]);
 // Legacy (API 1.10) info.state strings that mean busy. Same principle: match conflict states
 // only. 'not enough storage space' is a hard blocker rather than transient, but firing a
@@ -392,6 +399,7 @@ async function readBoardBusyState(ip) {
 }
 
 
+// Extract an operator-facing input NUMBER from a group. Names typically embed a number
 // ("IN 12", "Input 12", "12"); we grab the first integer we find. Falls back to null.
 function groupNumber(g) {
   const m = (g && typeof g.name === 'string') ? g.name.match(/\d+/) : null;
