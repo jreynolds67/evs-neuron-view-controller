@@ -1533,6 +1533,7 @@ function gpWidgetRow(cardId, headUuid, w) {
     <div class="muted mono" style="font-size:12px">current: <span class="gp-cur"></span></div>
     <div class="inline" style="gap:6px; margin-top:8px; flex-wrap:wrap">
       <button class="btn sm ghost gp-full">Set fullscreen (0,0,1,1)</button>
+      <button class="btn sm ghost gp-hide">Hide (0,0,0,0)</button>
       <button class="btn sm ghost gp-restore" disabled>Restore size</button>
       <span class="inline" style="gap:4px; align-items:center">
         <span class="muted" style="font-size:12px">custom:</span>
@@ -1581,6 +1582,8 @@ function gpWidgetRow(cardId, headUuid, w) {
 
   box.querySelector('.gp-full').addEventListener('click',
     () => apply({ x: 0, y: 0, width: 1, height: 1 }, 'fullscreen'));
+  box.querySelector('.gp-hide').addEventListener('click',
+    () => apply({ x: 0, y: 0, width: 0, height: 0 }, 'hide (zero area)'));
   box.querySelector('.gp-apply').addEventListener('click', () => {
     const val = (cls) => parseFloat(box.querySelector(cls).value);
     const geometry = { x: val('.gp-x'), y: val('.gp-y'), width: val('.gp-w'), height: val('.gp-h') };
