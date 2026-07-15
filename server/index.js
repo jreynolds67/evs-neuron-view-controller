@@ -349,7 +349,14 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/preview', async (req, res) => 
     // that specific case by checking whether the requested head still exists live, and return
     // a clear, actionable message instead of leaking a raw "IP/UUID -> 500". Any OTHER failure
     // passes through unchanged so we don't mask real board problems.
+    //
+    // Only run this probe when the board actually ANSWERED with an HTTP error (e.status set,
+    // e.code absent — e.g. a 500 on the dead UUID). A transport failure sets e.code
+    // (ECONNREFUSED/ETIMEDOUT/…) and means the board is unreachable: the probe can't succeed
+    // and would fire another uncached, full-timeout getHeads on EVERY poll, defeating the
+    // negative cache and hammering a board that's already down. Skip it in that case.
     try {
+      if (e.code) throw e; // transport failure — don't probe a dead board
       const live = await getHeads(card.ip);
       const stillLive = (live || []).some((h) => h.uuid === req.params.headUuid);
       if (!stillLive) {

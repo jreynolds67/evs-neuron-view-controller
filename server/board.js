@@ -500,7 +500,10 @@ export function normalizeWidgetForPreview(w) {
         else if (d.kind === 'input') out.text = `‹${d.value}›`;
         else if (d.kind === 'timecode') out.text = d.value === 'realtime' ? '‹clock›' : '‹TC›';
         else if (d.kind === 'reference') out.text = `‹${d.value}›`;
-        else if (d.kind === 'protocol') out.text = `‹P${d.value}›`;
+        // protocol:: text is a dynamic UMD/tally label driven by an external protocol source
+        // (protocol::0..7). Its live value can't be resolved from the stored model, and the
+        // placeholder (‹P0› etc.) is just noise in a schematic preview — so render no label.
+        // (input/timecode/reference above still show a marker; only protocol is suppressed.)
       }
     }
     // color fields — only literal color:: values become real colors; dynamic sources

@@ -649,25 +649,30 @@ function fsIsEditing() {
   return !!$('fsOverlay').querySelector('.fs-window.editing');
 }
 
-// Poll the enlarged view so a snapshot recalled from ANOTHER panel redraws it. A cycle that
-// lands while the operator is mid-edit is skipped entirely (see fsIsEditing). Because no
-// input is open when we DO redraw, a full renderFullscreen() is safe here.
+// Poll the enlarged view so a snapshot recalled from ANOTHER panel redraws it. This runs even
+// while the operator is mid-edit: when no input is open we do a full renderFullscreen(); when
+// one IS open we use updateFullscreenPreservingEdit(), which live-updates every OTHER window
+// (e.g. a layout recall or a group change another operator made on this same head) while
+// leaving the field being typed into untouched.
 function startFullscreenPolling() {
   stopFullscreenPolling();
   const tick = async () => {
     if (!fsState) { stopFullscreenPolling(); return; }
-    if (!document.hidden && !fsIsEditing()) {
+    if (!document.hidden) {
       try {
         const head = fsState.head;
         const [{ widgets }, { groups }] = await Promise.all([
           api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
           api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
         ]);
-        // Guard against races: the view may have closed, or an edit may have begun, during
-        // the fetch. Bail rather than redraw over either.
-        if (fsState && fsState.head === head && !fsIsEditing()) {
-          fsState = { head, widgets: widgets || [], groups: groups || [] };
-          renderFullscreen();
+        // Guard against a race: the view may have closed or switched heads during the fetch.
+        if (fsState && fsState.head === head) {
+          if (fsIsEditing()) {
+            updateFullscreenPreservingEdit(widgets || [], groups || []);
+          } else {
+            fsState = { head, widgets: widgets || [], groups: groups || [] };
+            renderFullscreen();
+          }
         }
       } catch { /* transient poll failure — keep the current view, try again next cycle */ }
     }
@@ -730,74 +735,121 @@ function renderFullscreen() {
     return;
   }
 
-  widgets.forEach((wd) => {
-    const g = wd.geometry || {};
-    const win = document.createElement('div');
-    win.className = 'fs-window';
-    win.style.left = `${(g.x || 0) * 100}%`;
-    win.style.top = `${(g.y || 0) * 100}%`;
-    win.style.width = `${(g.width || 0) * 100}%`;
-    win.style.height = `${(g.height || 0) * 100}%`;
+  widgets.forEach((wd) => stage.appendChild(createFsWindow(wd)));
+}
 
-    const grp = groupByUuid(wd.groupUuid);
-    const label = grp
-      ? (grp.number != null ? String(grp.number) : (grp.name || '—'))
-      : '—';
-    win.innerHTML = `
+// Build one enlarged-view window node: positioned by its fractional geometry, labelled with
+// its current input-group number, and wired for tap-to-edit. Extracted from renderFullscreen
+// so the live-refresh path can rebuild individual windows WITHOUT disturbing another window
+// the operator is currently editing (see updateFullscreenPreservingEdit).
+function createFsWindow(wd) {
+  const g = wd.geometry || {};
+  const win = document.createElement('div');
+  win.className = 'fs-window';
+  win.dataset.widgetUuid = wd.uuid; // stable key for the reconciling live update
+  win.style.left = `${(g.x || 0) * 100}%`;
+  win.style.top = `${(g.y || 0) * 100}%`;
+  win.style.width = `${(g.width || 0) * 100}%`;
+  win.style.height = `${(g.height || 0) * 100}%`;
+
+  const grp = groupByUuid(wd.groupUuid);
+  const label = grp
+    ? (grp.number != null ? String(grp.number) : (grp.name || '—'))
+    : '—';
+  win.innerHTML = `
       <span class="fs-win-num"></span>
       <input class="fs-win-input mono" inputmode="numeric" maxlength="4" />
       <span class="fs-win-name"></span>`;
-    win.querySelector('.fs-win-num').textContent = label;
-    win.querySelector('.fs-win-name').textContent = grp ? (grp.name || '') : 'unassigned';
+  win.querySelector('.fs-win-num').textContent = label;
+  win.querySelector('.fs-win-name').textContent = grp ? (grp.name || '') : 'unassigned';
 
-    const numEl = win.querySelector('.fs-win-num');
-    const input = win.querySelector('.fs-win-input');
+  const input = win.querySelector('.fs-win-input');
 
-    // Tap/click the window → immediately begin keyboard entry.
-    win.addEventListener('click', () => {
-      if (win.classList.contains('editing')) return;
-      win.classList.add('editing');
-      input.value = '';
-      input.placeholder = grp && grp.number != null ? String(grp.number) : '';
-      input.focus();
-    });
-
-    const commit = async () => {
-      const raw = input.value.trim();
-      win.classList.remove('editing');
-      if (raw === '') return; // no change
-      const num = parseInt(raw, 10);
-      if (Number.isNaN(num)) { toast('Enter a number', 'err'); return; }
-      const target = groupByNumber(num);
-      if (!target) { toast(`No input group numbered ${num} on this card`, 'err'); return; }
-      try {
-        await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${wd.uuid}/group`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ groupUuid: target.uuid }),
-        });
-        wd.groupUuid = target.uuid;
-        renderFullscreen();
-        toast(`Window set to input ${num}${target.name ? ' (' + target.name + ')' : ''}`, 'ok');
-      } catch (e) {
-        // A concurrent recall from another panel is reported by the server as a RECALLED
-        // conflict. Show the clear message in THIS view's toast, then refresh so the operator
-        // sees the current (externally changed) state rather than their rejected edit.
-        toast(e.message, 'err');
-        if (e.code === 'RECALLED' || e.status === 409) {
-          fsRefreshNow();
-        }
-      }
-    };
-
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); commit(); }
-      else if (e.key === 'Escape') { e.preventDefault(); win.classList.remove('editing'); }
-    });
-    input.addEventListener('blur', () => { win.classList.remove('editing'); });
-
-    stage.appendChild(win);
+  // Tap/click the window → immediately begin keyboard entry.
+  win.addEventListener('click', () => {
+    if (win.classList.contains('editing')) return;
+    win.classList.add('editing');
+    input.value = '';
+    input.placeholder = grp && grp.number != null ? String(grp.number) : '';
+    input.focus();
   });
+
+  const commit = async () => {
+    const raw = input.value.trim();
+    win.classList.remove('editing');
+    if (raw === '') return; // no change
+    const num = parseInt(raw, 10);
+    if (Number.isNaN(num)) { toast('Enter a number', 'err'); return; }
+    const target = groupByNumber(num);
+    if (!target) { toast(`No input group numbered ${num} on this card`, 'err'); return; }
+    try {
+      await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${wd.uuid}/group`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupUuid: target.uuid }),
+      });
+      // Reflect the change in the live model so the immediate re-render shows it — even if a
+      // background poll swapped fsState.widgets for a fresh array while we were editing (in
+      // which case the closed-over `wd` is no longer the object renderFullscreen reads).
+      const cur = (fsState.widgets || []).find((w) => w.uuid === wd.uuid);
+      (cur || wd).groupUuid = target.uuid;
+      renderFullscreen();
+      toast(`Window set to input ${num}${target.name ? ' (' + target.name + ')' : ''}`, 'ok');
+    } catch (e) {
+      // A concurrent recall from another panel is reported by the server as a RECALLED
+      // conflict. Show the clear message in THIS view's toast, then refresh so the operator
+      // sees the current (externally changed) state rather than their rejected edit.
+      toast(e.message, 'err');
+      if (e.code === 'RECALLED' || e.status === 409) {
+        fsRefreshNow();
+      }
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); win.classList.remove('editing'); }
+  });
+  input.addEventListener('blur', () => { win.classList.remove('editing'); });
+
+  return win;
+}
+
+// Live-refresh the enlarged view WITHOUT disturbing the window the operator is mid-edit on.
+// Used when a poll lands while an input is open: another operator may have recalled a layout
+// or repointed a different window on this same head, and that should show up live — but the
+// field being typed into must be left exactly as-is. Rebuilds every OTHER window from fresh
+// data and leaves the editing window's DOM node untouched.
+function updateFullscreenPreservingEdit(widgets, groups) {
+  const overlay = $('fsOverlay');
+  const editingWin = overlay ? overlay.querySelector('.fs-window.editing') : null;
+  const editingUuid = editingWin ? editingWin.dataset.widgetUuid : null;
+
+  // If the widget being edited no longer exists in the fresh data, another operator replaced
+  // the whole head (a restore gives every widget a new UUID). Don't yank the in-progress edit:
+  // leave the view untouched. The operator's commit will hit the RECALLED conflict and refresh
+  // then — the same safe path as before.
+  if (editingUuid && !widgets.some((w) => w.uuid === editingUuid)) return;
+
+  // Adopt the fresh data as the source of truth (commit() and label lookups read fsState).
+  fsState = { head: fsState.head, widgets, groups };
+
+  const stage = $('fsBody').querySelector('.fs-stage');
+  if (!stage) { renderFullscreen(); return; }
+
+  const existing = new Map();
+  stage.querySelectorAll('.fs-window').forEach((el) => existing.set(el.dataset.widgetUuid, el));
+
+  const seen = new Set();
+  widgets.forEach((wd) => {
+    seen.add(wd.uuid);
+    if (wd.uuid === editingUuid) return; // preserve the field being edited, untouched
+    const fresh = createFsWindow(wd);
+    const old = existing.get(wd.uuid);
+    if (old) stage.replaceChild(fresh, old); else stage.appendChild(fresh);
+  });
+  // Remove windows that no longer exist (the editing one is guaranteed present by the guard).
+  existing.forEach((el, uuid) => { if (!seen.has(uuid) && uuid !== editingUuid) el.remove(); });
 }
 
 // ---- Boot -----------------------------------------------------------------
