@@ -1151,6 +1151,8 @@ const gpLoadBtn = $('gpLoad');
 if (gpLoadBtn) gpLoadBtn.addEventListener('click', gpLoadWidgets);
 const gpRestoreOrderBtn = $('gpRestoreOrder');
 if (gpRestoreOrderBtn) gpRestoreOrderBtn.addEventListener('click', gpRestoreOrder);
+const gpRestoreAllBtn = $('gpRestoreAll');
+if (gpRestoreAllBtn) gpRestoreAllBtn.addEventListener('click', gpRestoreAllSizes);
 
 // ---- Global per-head snapshot filters -------------------------------------
 
@@ -1475,6 +1477,7 @@ async function runSyncDiag(card, append = false) {
 // "original" geometry (gpSaved) drives the Restore button. Nothing is persisted to config.
 const gpSaved = new Map();       // widgetUuid -> previous geometry captured on first apply
 const gpSavedOrder = new Map();  // headUuid   -> original widget order captured on first reorder
+let gpCtx = { cardId: '', headUuid: '', widgets: [] }; // last-loaded head, for Solo / Restore all
 
 function renderGeomProbeCards() {
   const sel = $('gpCard'); if (!sel) return;
@@ -1518,7 +1521,9 @@ async function gpLoadWidgets() {
       `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets`,
       { headers: headers() }).then((r) => r.json());
     if (!Array.isArray(widgets)) throw new Error(widgets.error || 'Failed to load widgets');
+    gpCtx = { cardId, headUuid, widgets };
     const ro = $('gpRestoreOrder'); if (ro) ro.disabled = !gpSavedOrder.has(headUuid);
+    gpUpdateRestoreAll();
     $('gpState').textContent = `${widgets.length} widget(s) — changes are live and reversible`;
     if (!widgets.length) { host.innerHTML = '<div class="muted">No widgets on this head.</div>'; return; }
     widgets.forEach((w) => host.appendChild(gpWidgetRow(cardId, headUuid, w)));
@@ -1532,6 +1537,7 @@ function gpWidgetRow(cardId, headUuid, w) {
     <div class="syncdiag-title">${esc(w.name || w.uuid)}</div>
     <div class="muted mono" style="font-size:12px">current: <span class="gp-cur"></span></div>
     <div class="inline" style="gap:6px; margin-top:8px; flex-wrap:wrap">
+      <button class="btn sm gp-solo">Solo (full + hide others)</button>
       <button class="btn sm ghost gp-full">Set fullscreen (0,0,1,1)</button>
       <button class="btn sm ghost gp-hide">Hide (0,0,0,0)</button>
       <button class="btn sm ghost gp-restore" disabled>Restore size</button>
@@ -1573,6 +1579,7 @@ function gpWidgetRow(cardId, headUuid, w) {
       if (body.previous && !gpSaved.has(w.uuid)) gpSaved.set(w.uuid, body.previous);
       curEl.textContent = gpFmtGeom(body.applied || geometry);
       restoreBtn.disabled = !gpSaved.has(w.uuid);
+      gpUpdateRestoreAll();
       out.innerHTML = `<span style="color:var(--fire)">ACCEPTED — HTTP ${r.status} → ${esc(gpFmtGeom(body.applied || geometry))}. `
         + `Check the head: is it truly fullscreen, and are the other windows hidden or bleeding through?</span>`;
       refreshLog();
@@ -1624,7 +1631,66 @@ function gpWidgetRow(cardId, headUuid, w) {
   };
   box.querySelector('.gp-front').addEventListener('click', () => reorder('front'));
   box.querySelector('.gp-back').addEventListener('click', () => reorder('back'));
+  box.querySelector('.gp-solo').addEventListener('click', () => gpSolo(w.uuid));
   return box;
+}
+
+// Set the flag on the head-level "Restore all sizes" button based on whether any widget on the
+// currently-loaded head has a captured original geometry.
+function gpUpdateRestoreAll() {
+  const btn = $('gpRestoreAll'); if (!btn) return;
+  btn.disabled = !gpCtx.widgets.some((w) => gpSaved.has(w.uuid));
+}
+
+// One geometry POST helper used by the multi-widget Solo / Restore-all flows. Captures the
+// original geometry on the first move so it can be restored exactly. Returns true on success.
+async function gpSetGeometry(cardId, headUuid, widgetUuid, geometry) {
+  const r = await fetch(
+    `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets/${encodeURIComponent(widgetUuid)}/geometry`,
+    { method: 'POST', headers: headers(), body: JSON.stringify({ geometry }) });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, status: r.status, error: body.error, detail: body.detail };
+  if (body.previous && !gpSaved.has(widgetUuid)) gpSaved.set(widgetUuid, body.previous);
+  return { ok: true };
+}
+
+// SOLO — the actual proposed mechanism, in prototype: target widget → fullscreen, every other
+// widget on the head → zero area (hidden). This is the real test of whether "blow up one window"
+// can produce a clean fullscreen despite the fixed z-order. Reversible via "Restore all sizes".
+async function gpSolo(targetUuid) {
+  const { cardId, headUuid, widgets } = gpCtx;
+  if (!cardId || !headUuid || !widgets.length) return;
+  $('gpState').textContent = 'Soloing (target → fullscreen, others → hidden)…';
+  let failed = 0;
+  for (const w of widgets) {
+    const geometry = (w.uuid === targetUuid)
+      ? { x: 0, y: 0, width: 1, height: 1 }
+      : { x: 0, y: 0, width: 0, height: 0 };
+    const res = await gpSetGeometry(cardId, headUuid, w.uuid, geometry);
+    if (!res.ok) failed++;
+  }
+  refreshLog();
+  $('gpState').textContent = failed
+    ? `Solo applied with ${failed} error(s) — check the API log. Then check the wall.`
+    : 'Solo applied — is the target now cleanly fullscreen with the others gone? “Restore all sizes” undoes it.';
+  gpLoadWidgets(); // refresh rows + button states from the board's new state
+}
+
+// Restore every captured original geometry on the currently-loaded head (undo a Solo).
+async function gpRestoreAllSizes() {
+  const { cardId, headUuid, widgets } = gpCtx;
+  if (!cardId || !headUuid) return;
+  $('gpState').textContent = 'Restoring all sizes…';
+  let failed = 0;
+  for (const w of widgets) {
+    const prev = gpSaved.get(w.uuid);
+    if (!prev) continue;
+    const res = await gpSetGeometry(cardId, headUuid, w.uuid, prev);
+    if (res.ok) gpSaved.delete(w.uuid); else failed++;
+  }
+  refreshLog();
+  $('gpState').textContent = failed ? `Restore finished with ${failed} error(s) — check the API log.` : 'All sizes restored.';
+  gpLoadWidgets();
 }
 
 // Restore a head's original widget z-order captured on the first reorder in this session.
