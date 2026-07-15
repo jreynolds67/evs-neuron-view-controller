@@ -17,7 +17,7 @@ import {
   getSnapshotModel, extractSnapshotHeads, restorePartial,
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
-  getInputGroups, setWidgetGroup,
+  getInputGroups, setWidgetGroup, setWidgetGeometry,
 } from './board.js';
 import { getEntries, clear as clearLog, log } from './logger.js';
 import { startShareSweep, shareSweepStatus, runShareSweepNow, applyShareSweepConfig } from './sharesweep.js';
@@ -955,6 +955,45 @@ app.post('/api/admin/cards/:cardId/sync-trigger', requireAdmin, async (req, res)
   } catch (e) {
     res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });
   }
+});
+
+// --- Widget geometry PROBE (admin-only test tool) --------------------------
+// Answers the one thing the API spec can't: will a board accept overlapping / fullscreen /
+// off-canvas widget geometry that the native GUI blocks? Read-modify-write on a single widget,
+// fully reversible (the POST returns the previous geometry so the UI can restore it). Nothing
+// here is persisted to config. This is scaffolding to validate the "blow a window up to
+// fullscreen" idea before committing to the full feature.
+
+// List a head's widgets with their current geometry, so a widget can be picked to test.
+app.get('/api/admin/cards/:cardId/heads/:headUuid/widgets', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  try {
+    const widgets = await getHeadWidgets(card.ip, req.params.headUuid);
+    res.json((widgets || []).map((w) => ({
+      uuid: w.uuid, name: w.name || '', groupUuid: w.groupUuid || '', geometry: w.geometry || null,
+    })));
+  } catch (e) { sendErr(res, e); }
+});
+
+// Apply an arbitrary geometry to one widget. Body: { geometry: { x, y, width, height } }.
+// Values are NOT range-clamped on purpose — the whole point is to see whether the board rejects
+// out-of-bounds/overlapping geometry (a raw 400 body is surfaced via sendErr for diagnosis).
+app.post('/api/admin/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/geometry', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const g = (req.body && req.body.geometry) || {};
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : NaN;
+  const geometry = { x: num(g.x), y: num(g.y), width: num(g.width), height: num(g.height) };
+  if (Object.values(geometry).some(Number.isNaN)) {
+    return res.status(400).json({ error: 'geometry must have numeric x, y, width, height' });
+  }
+  try {
+    const out = await setWidgetGeometry(card.ip, req.params.headUuid, req.params.widgetUuid, geometry);
+    res.json({ ok: true, ...out });
+  } catch (e) { sendErr(res, e); }
 });
 
 

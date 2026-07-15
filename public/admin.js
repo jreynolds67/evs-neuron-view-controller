@@ -98,6 +98,7 @@ function renderCards() {
   }));
   if (typeof renderReachRow === 'function') renderReachRow();
   if (typeof renderSyncDiagCards === 'function') renderSyncDiagCards();
+  if (typeof renderGeomProbeCards === 'function') renderGeomProbeCards();
   if (typeof renderHeadFilterCards === 'function') renderHeadFilterCards();
   if (typeof loadAllStorage === 'function') loadAllStorage();
 }
@@ -1143,6 +1144,12 @@ async function relinkHeadsByName() {
 const relinkBtn = $('relinkHeads');
 if (relinkBtn) relinkBtn.addEventListener('click', relinkHeadsByName);
 
+// Widget geometry probe (test tool) controls.
+const gpCardSel = $('gpCard');
+if (gpCardSel) gpCardSel.addEventListener('change', gpLoadHeads);
+const gpLoadBtn = $('gpLoad');
+if (gpLoadBtn) gpLoadBtn.addEventListener('click', gpLoadWidgets);
+
 // ---- Global per-head snapshot filters -------------------------------------
 
 function renderHeadFilterCards() {
@@ -1458,6 +1465,128 @@ async function runSyncDiag(card, append = false) {
   } catch (e) {
     box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div><div class="stor-err">${esc(e.message)}</div>`;
   }
+}
+
+// ---- Widget geometry probe (test tool) ------------------------------------
+// Fully reversible read-modify-write on one widget's geometry, to learn whether the board
+// accepts fullscreen/overlapping/off-canvas geometry the native GUI blocks. Per-widget captured
+// "original" geometry (gpSaved) drives the Restore button. Nothing is persisted to config.
+const gpSaved = new Map(); // widgetUuid -> previous geometry captured on first apply
+
+function renderGeomProbeCards() {
+  const sel = $('gpCard'); if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— select a card —</option>' +
+    config.cards.filter((c) => c.id && c.ip)
+      .map((c) => `<option value="${esc(c.id)}">${esc(c.label || c.id)}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+async function gpLoadHeads() {
+  const cardId = $('gpCard').value;
+  const headSel = $('gpHead');
+  $('gpWidgets').innerHTML = ''; $('gpState').textContent = '';
+  headSel.innerHTML = '<option value="">— select a head —</option>';
+  if (!cardId) return;
+  headSel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const heads = await probeCardHeads(cardId); // [{uuid,name}]
+    headSel.innerHTML = '<option value="">— select a head —</option>' +
+      heads.map((h) => `<option value="${esc(h.uuid)}">${esc(h.name || h.uuid)}</option>`).join('');
+  } catch (e) {
+    headSel.innerHTML = `<option value="">Error: ${esc(e.message)}</option>`;
+  }
+}
+
+function gpFmtGeom(g) {
+  if (!g) return '—';
+  const r = (n) => (typeof n === 'number' ? Math.round(n * 1000) / 1000 : n);
+  return `x:${r(g.x)} y:${r(g.y)} w:${r(g.width)} h:${r(g.height)}`;
+}
+
+async function gpLoadWidgets() {
+  const cardId = $('gpCard').value, headUuid = $('gpHead').value;
+  const host = $('gpWidgets'); host.innerHTML = '';
+  if (!cardId || !headUuid) { $('gpState').textContent = 'Pick a card and a head first.'; return; }
+  $('gpState').textContent = 'Loading widgets…';
+  try {
+    const widgets = await fetch(
+      `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets`,
+      { headers: headers() }).then((r) => r.json());
+    if (!Array.isArray(widgets)) throw new Error(widgets.error || 'Failed to load widgets');
+    $('gpState').textContent = `${widgets.length} widget(s) — changes are live and reversible`;
+    if (!widgets.length) { host.innerHTML = '<div class="muted">No widgets on this head.</div>'; return; }
+    widgets.forEach((w) => host.appendChild(gpWidgetRow(cardId, headUuid, w)));
+  } catch (e) { $('gpState').textContent = 'Error: ' + e.message; }
+}
+
+function gpWidgetRow(cardId, headUuid, w) {
+  const box = document.createElement('div');
+  box.className = 'syncdiag-card';
+  box.innerHTML = `
+    <div class="syncdiag-title">${esc(w.name || w.uuid)}</div>
+    <div class="muted mono" style="font-size:12px">current: <span class="gp-cur"></span></div>
+    <div class="inline" style="gap:6px; margin-top:8px; flex-wrap:wrap">
+      <button class="btn sm ghost gp-full">Set fullscreen (0,0,1,1)</button>
+      <button class="btn sm ghost gp-restore" disabled>Restore</button>
+      <span class="inline" style="gap:4px; align-items:center">
+        <span class="muted" style="font-size:12px">custom:</span>
+        <input class="gp-x" style="width:56px" placeholder="x" inputmode="decimal">
+        <input class="gp-y" style="width:56px" placeholder="y" inputmode="decimal">
+        <input class="gp-w" style="width:56px" placeholder="w" inputmode="decimal">
+        <input class="gp-h" style="width:56px" placeholder="h" inputmode="decimal">
+        <button class="btn sm ghost gp-apply">Apply</button>
+      </span>
+    </div>
+    <div class="mono gp-out" style="font-size:12px; margin-top:6px; color:var(--ink-dim); word-break:break-word"></div>`;
+  const out = box.querySelector('.gp-out');
+  const curEl = box.querySelector('.gp-cur');
+  const restoreBtn = box.querySelector('.gp-restore');
+  curEl.textContent = gpFmtGeom(w.geometry);
+  if (gpSaved.has(w.uuid)) restoreBtn.disabled = false; // survived a re-load while blown up
+
+  const apply = async (geometry, label) => {
+    out.textContent = `Applying ${label}…`;
+    try {
+      const r = await fetch(
+        `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets/${encodeURIComponent(w.uuid)}/geometry`,
+        { method: 'POST', headers: headers(), body: JSON.stringify({ geometry }) });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        out.innerHTML = `<span class="stor-err">REJECTED — HTTP ${r.status}: ${esc(body.error || 'failed')}`
+          + `${body.detail ? ' · ' + esc(String(body.detail)) : ''}</span>`;
+        refreshLog();
+        return false;
+      }
+      // Capture the original geometry the FIRST time we move this widget, so Restore is exact.
+      if (body.previous && !gpSaved.has(w.uuid)) gpSaved.set(w.uuid, body.previous);
+      curEl.textContent = gpFmtGeom(body.applied || geometry);
+      restoreBtn.disabled = !gpSaved.has(w.uuid);
+      out.innerHTML = `<span style="color:var(--fire)">ACCEPTED — HTTP ${r.status} → ${esc(gpFmtGeom(body.applied || geometry))}. `
+        + `Check the head: is it truly fullscreen, and are the other windows hidden or bleeding through?</span>`;
+      refreshLog();
+      return true;
+    } catch (e) { out.innerHTML = `<span class="stor-err">${esc(e.message)}</span>`; return false; }
+  };
+
+  box.querySelector('.gp-full').addEventListener('click',
+    () => apply({ x: 0, y: 0, width: 1, height: 1 }, 'fullscreen'));
+  box.querySelector('.gp-apply').addEventListener('click', () => {
+    const val = (cls) => parseFloat(box.querySelector(cls).value);
+    const geometry = { x: val('.gp-x'), y: val('.gp-y'), width: val('.gp-w'), height: val('.gp-h') };
+    if (Object.values(geometry).some((n) => Number.isNaN(n))) {
+      out.innerHTML = '<span class="stor-err">Enter numeric x, y, w, h (fractions 0–1; try &gt;1 or &lt;0 to test off-canvas).</span>';
+      return;
+    }
+    apply(geometry, 'custom');
+  });
+  restoreBtn.addEventListener('click', async () => {
+    const prev = gpSaved.get(w.uuid);
+    if (!prev) return;
+    const okDone = await apply(prev, 'restore');
+    if (okDone) { gpSaved.delete(w.uuid); restoreBtn.disabled = true; }
+  });
+  return box;
 }
 
 // Auto-share is now edited inline: the Enabled toggle, interval, and card chips mutate

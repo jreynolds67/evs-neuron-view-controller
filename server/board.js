@@ -474,6 +474,36 @@ export async function setWidgetGroup(ip, headUuid, widgetUuid, groupUuid) {
   return result;
 }
 
+// Set ONE widget's geometry via read-modify-write, preserving every other field (elements,
+// groupUuid, name, properties). This is the core primitive for the eventual "blow a window up
+// to fullscreen" feature; right now it backs the admin geometry PROBE, whose job is to answer
+// an unknown the API spec can't: will the board accept overlapping / off-canvas geometry that
+// the native GUI blocks? Returns the previous geometry so the caller can restore it exactly.
+//
+// NOTE: deliberately WITHOUT the concurrent-edit fingerprint guard setWidgetGroup uses — the
+// probe is a single deliberate admin action. The production fullscreen feature would reinstate
+// that guard (and capture the whole head), since it fires unattended from operator panels.
+export async function setWidgetGeometry(ip, headUuid, widgetUuid, geometry) {
+  const cur = await getHeadWidget(ip, headUuid, widgetUuid);
+  const previous = cur.geometry || null;
+  const change = {
+    elements: cur.elements || [],
+    geometry,
+    groupUuid: cur.groupUuid || '',
+    name: cur.name || '',
+    properties: cur.properties || { borderColor: '', borderSize: '' },
+  };
+  const result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
+    method: 'PUT',
+    body: JSON.stringify(change),
+  });
+  log({
+    ip, method: 'GEOM', path: `/heads/${headUuid}/widgets/${widgetUuid}`, status: null, ok: true,
+    detail: `geometry -> x:${geometry.x} y:${geometry.y} w:${geometry.width} h:${geometry.height}`,
+  });
+  return { previous, applied: geometry, result };
+}
+
 // Reduce a raw widget (WidgetGet) to the minimal shape the preview renderer needs:
 // its geometry, and its elements' geometry + type + a couple of display hints. Keeps
 // the payload small and hides board internals from the browser.
