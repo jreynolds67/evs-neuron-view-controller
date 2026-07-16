@@ -58,13 +58,27 @@ async function loadConfig() {
     // config (their standalone Save buttons were removed), so we keep them in the held config.
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();
+    // If a card's head filters are open, re-render their checkboxes against the config we just
+    // loaded — otherwise they'd still show the PREVIOUS config's ticks, which a later Save would
+    // then write back. Harmless on a manual Reload; actively wrong after a silent refresh.
+    if ($('hfCard') && $('hfCard').value) renderGlobalHeadFilters($('hfCard').value);
+    // Baseline for dirty-tracking, taken AFTER the render pass: rendering normalises config in
+    // place (pads layout grids, renumbers head order), so snapshotting before it would make a
+    // freshly-loaded page look edited.
+    markClean();
     setLoadState('Loaded');
     if (typeof refreshBackup === 'function') refreshBackup();
     if (typeof refreshSweep === 'function') refreshSweep();
   } catch (e) { setLoadState('Error: ' + e.message); }
 }
 
+// True while our own PUT is in flight. The server broadcasts the change to every admin page
+// including this one, and that broadcast can land before our response does — without this, a
+// window would report its OWN save as someone else's change.
+let savePending = false;
+
 async function saveConfig() {
+  savePending = true;
   try {
     const res = await fetch('/api/admin/config', {
       method: 'PUT', headers: headers(), body: JSON.stringify(config),
@@ -82,9 +96,14 @@ async function saveConfig() {
     if (!res.ok) throw new Error(body.error || res.status);
     // Adopt the new token, or this window's NEXT save would be refused as stale.
     if (typeof body.configVersion === 'number') config.configVersion = body.configVersion;
+    // What's on screen is now what's stored — this is the new dirty baseline, and any stale
+    // notice is resolved by our own save.
+    markClean();
+    hideCfgBanner();
     $('saveState').textContent = 'Saved ' + new Date().toLocaleTimeString();
     toast('Configuration saved', 'ok');
   } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+  finally { savePending = false; }
 }
 
 // ---- Cards ----------------------------------------------------------------
@@ -1675,6 +1694,84 @@ $('bkRun').addEventListener('click', async () => {
   } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
 });
 
+// ---- Live config sync between admin windows -------------------------------
+// The server broadcasts { type:'config-changed', configVersion } on every config write, so a
+// second admin window doesn't sit on a stale copy until someone happens to refresh it — and
+// then only discovers it when its Save is refused.
+//
+// This shares the operator panels' control socket but reacts to a DIFFERENT message. Panels
+// reload on 'reload'; this page must NEVER do that unprompted, because it can hold unsaved
+// edits that a reload would silently throw away. Hence: refresh only when there's nothing to
+// lose, otherwise say so and let the admin decide.
+
+// Serialized config as of the last load/save. Anything edited since makes the live object
+// differ. This ONLY gates whether an outside change can be adopted silently, and it errs
+// toward "dirty" on purpose: a wrong "dirty" costs a banner, a wrong "clean" destroys someone's
+// unsaved work. It has to err that way — the render pass normalises config in place (padding
+// layout grids, renumbering head order), which is indistinguishable from a real edit.
+let cleanSnapshot = null;
+function markClean() {
+  try { cleanSnapshot = JSON.stringify(config); } catch { cleanSnapshot = null; }
+}
+function isDirty() {
+  if (cleanSnapshot === null) return true;
+  try { return JSON.stringify(config) !== cleanSnapshot; } catch { return true; }
+}
+
+function showCfgBanner(msg) {
+  const el = $('cfgBanner');
+  if (!el) return;
+  $('cfgBannerMsg').textContent = msg;
+  el.classList.add('show');
+}
+function hideCfgBanner() { const el = $('cfgBanner'); if (el) el.classList.remove('show'); }
+
+function onConfigChangedElsewhere(version) {
+  // Already at (or ahead of) that version — this is our own save echoing back. Say nothing.
+  if (typeof version === 'number' && version <= (Number(config.configVersion) || 0)) return;
+  // One of ours is in flight. Either this broadcast is it, or another session beat us to it —
+  // and in that case our own PUT returns 409 and reports it properly. Don't double-report.
+  if (savePending) return;
+
+  if (isDirty()) {
+    showCfgBanner('Another admin session changed the configuration. This page is now showing an '
+      + 'older version, and saving from here will be refused. Reload to pick up the current '
+      + 'config — unsaved edits on this page will be lost, so use “Export backup” first if you '
+      + 'need to keep them.');
+    return;
+  }
+  // Nothing unsaved to protect — just adopt the new config in place.
+  hideCfgBanner();
+  loadConfig();
+  toast('Configuration updated by another admin session');
+}
+
+let cfgWs = null;
+function connectConfigWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  try {
+    cfgWs = new WebSocket(`${proto}://${location.host}/ws?control=1`);
+  } catch { setTimeout(connectConfigWs, 5000); return; }
+  cfgWs.onmessage = (ev) => {
+    let msg = null;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    // 'reload' is deliberately ignored here — it's the operator panels' message.
+    if (msg && msg.type === 'config-changed') onConfigChangedElsewhere(msg.configVersion);
+  };
+  // Reconnect so this survives a redeploy; without it the window goes quietly stale again.
+  cfgWs.onclose = () => setTimeout(connectConfigWs, 5000);
+  cfgWs.onerror = () => { try { cfgWs.close(); } catch {} };
+}
+
+const cfgReloadBtn = $('cfgBannerReload');
+if (cfgReloadBtn) cfgReloadBtn.addEventListener('click', () => {
+  if (isDirty() && !confirm('Reload the configuration and discard your unsaved changes on this page?')) return;
+  hideCfgBanner();
+  loadConfig();
+});
+const cfgBannerX = $('cfgBannerX');
+if (cfgBannerX) cfgBannerX.addEventListener('click', hideCfgBanner);
+
 const logoutBtn = $('logoutBtn');
 if (logoutBtn) logoutBtn.addEventListener('click', logout);
 
@@ -1683,6 +1780,7 @@ if (logoutBtn) logoutBtn.addEventListener('click', logout);
 fetch('/api/admin/session').then((r) => { if (r.ok) loadConfig(); });
 refreshLog(true);
 startLogAuto();
+connectConfigWs(); // keep this window in step with any other admin session
 
 // Sub-navigation: switch between admin tab panels. Purely a display grouping — all
 // sections stay in the DOM (so their render/refresh logic is unaffected), we just show

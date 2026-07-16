@@ -221,6 +221,19 @@
     .lc-chip { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
       padding: 8px 12px; font-size: 13px; cursor: grab; }
     .lc-chip:active { cursor: grabbing; }
+    /* "Another admin changed the config" notice. Only shown when this page has unsaved edits
+       that a silent refresh would destroy — a clean page just refreshes itself. Sticky rather
+       than a toast: it must not disappear on its own, since ignoring it means the next Save is
+       refused. */
+    .cfg-banner { display: none; position: sticky; top: 0; z-index: 20;
+      align-items: center; gap: 12px; padding: 11px 16px;
+      background: color-mix(in srgb, var(--arm) 16%, var(--panel));
+      border-bottom: 1px solid color-mix(in srgb, var(--arm) 55%, transparent); }
+    .cfg-banner.show { display: flex; }
+    .cfg-banner-msg { flex: 1; font-size: 13px; color: var(--ink); line-height: 1.45; }
+    .cfg-banner-x { background: transparent; border: none; color: var(--ink-dim);
+      font-size: 15px; cursor: pointer; padding: 2px 6px; line-height: 1; }
+    .cfg-banner-x:hover { color: var(--ink); }
   </style>
 </head>
 <body>
@@ -231,6 +244,12 @@
     <a class="tab active" href="admin.html">Admin</a>
     <a class="tab" href="index.html">Panel view</a>
     <button class="tab" id="logoutBtn" title="Sign out of admin">Sign out</button>
+  </div>
+
+  <div class="cfg-banner" id="cfgBanner">
+    <span class="cfg-banner-msg" id="cfgBannerMsg"></span>
+    <button class="btn sm" id="cfgBannerReload">Reload config</button>
+    <button class="cfg-banner-x" id="cfgBannerX" aria-label="Dismiss">✕</button>
   </div>
 
   <div class="wrap">

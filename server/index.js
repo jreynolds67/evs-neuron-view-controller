@@ -912,6 +912,13 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   if (next.shareSweep) { try { await applyShareSweepConfig(); } catch (e) { console.warn('[sharesweep] apply failed:', e.message); } }
   // Tell every connected panel to reload so config changes apply immediately.
   broadcastControl({ type: 'reload' });
+  // Separately, tell any other ADMIN page that the config moved. Deliberately NOT the same
+  // message as 'reload': the two audiences need opposite things. A panel holds no state and
+  // can reload on the spot; an admin page may hold unsaved edits, so it must decide for
+  // itself (see the handler in admin.js) and must never be reloaded out from under someone.
+  // Without this, the other window sits on a stale config until a manual refresh — and its
+  // next Save just fails the version check with no idea why.
+  broadcastControl({ type: 'config-changed', configVersion: next.configVersion });
   // Hand back the new token so THIS window's next save isn't refused as stale.
   res.json({ ok: true, configVersion: next.configVersion });
 });
@@ -985,6 +992,8 @@ app.put('/api/admin/sharesweep', requireAdmin, async (req, res) => {
   };
   await saveConfig(config);
   await applyShareSweepConfig(); // apply live without restart
+  // Same as the backup endpoint: notify other admin pages, but don't reload operator panels.
+  broadcastControl({ type: 'config-changed', configVersion: config.configVersion });
   // configVersion: every saveConfig bumps the token, so return it or the caller's next main
   // config save would be refused as stale.
   res.json({ ok: true, config: config.shareSweep, configVersion: config.configVersion });
@@ -1019,6 +1028,10 @@ app.put('/api/admin/backup', requireAdmin, async (req, res) => {
     configRetentionDays: Math.max(1, Math.min(365, parseInt(configRetentionDays, 10) || prev.configRetentionDays || 30)),
   };
   await saveConfig(config);
+  // Other admin pages need to know the token moved. Note: 'config-changed' ONLY — no 'reload'.
+  // This endpoint exists precisely so "Back up now" doesn't bounce every operator panel
+  // mid-show; broadcasting a reload here would reintroduce exactly that on-air side effect.
+  broadcastControl({ type: 'config-changed', configVersion: config.configVersion });
   // configVersion: "Back up now" saves through here, and every saveConfig bumps the token — so
   // return it, or that button would leave the page unable to save anything else.
   res.json({ ok: true, config: config.backup, configVersion: config.configVersion });

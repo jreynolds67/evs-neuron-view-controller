@@ -229,9 +229,22 @@ so its tabs can't clobber each other.
 The save is a **whole-config replace**, guarded by `configVersion`: the page sends the version
 it loaded, and the server refuses the save if the stored version has moved on. So two admin
 windows open at once no longer silently last-write-win — the second Save is **rejected** with a
-clear message instead of reverting the first. To recover, use **Export backup** to keep your
-edits, reload, and reapply them. Every write bumps the version, including "Back up now" (which
-saves through its own endpoint), so those paths hand the new version back to the page.
+clear message instead of reverting the first. Every write bumps the version, including "Back up
+now" (which saves through its own endpoint), so those paths hand the new version back to the page.
+
+Admin windows also **stay in step live**. Every config write broadcasts `config-changed` on the
+same control WebSocket the panels use, and any other open admin page reacts:
+
+- **No unsaved edits** → it re-loads the config silently, so the change just appears (a backup
+  time edited in one window shows up in the other without a refresh).
+- **Unsaved edits** → it does **not** touch them. A sticky banner says the config moved and
+  offers *Reload config*; reloading discards local edits, so **Export backup** first if you need
+  them. Dismissing the banner leaves the page stale, and its next Save is refused as above.
+
+Note `config-changed` is deliberately separate from the panels' `reload` message: a panel holds
+no state and can reload instantly, an admin page may hold unsaved work and must never be
+reloaded out from under someone. "Back up now" sends `config-changed` **only** — it must not
+bounce operator panels mid-show.
 
 ### Per-head snapshot filters
 
