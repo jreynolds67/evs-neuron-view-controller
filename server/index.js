@@ -18,7 +18,7 @@ import {
   normalizeSnapshotEntry, getHeadWidgets, normalizeWidgetForPreview,
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
   getInputGroups, setWidgetGroup, setWidgetGeometry,
-  moveHeadWidgetOrder, setHeadWidgetOrder,
+  moveHeadWidgetOrder, setHeadWidgetOrder, setWidgetElementsVisible,
 } from './board.js';
 import { getEntries, clear as clearLog, log } from './logger.js';
 import { startShareSweep, shareSweepStatus, runShareSweepNow, applyShareSweepConfig } from './sharesweep.js';
@@ -1012,6 +1012,19 @@ app.post('/api/admin/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/order', r
   try {
     const out = await moveHeadWidgetOrder(card.ip, req.params.headUuid, req.params.widgetUuid, position);
     res.json({ ok: true, position, ...out });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Toggle a widget's element visibility. Body: { visible: bool }. Tests hiding by transparency
+// instead of geometry.
+app.post('/api/admin/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/visible', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const visible = !!(req.body && req.body.visible);
+  try {
+    const out = await setWidgetElementsVisible(card.ip, req.params.headUuid, req.params.widgetUuid, visible);
+    res.json({ ok: true, ...out });
   } catch (e) { sendErr(res, e); }
 });
 

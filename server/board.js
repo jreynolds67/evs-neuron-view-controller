@@ -512,6 +512,33 @@ export async function setWidgetGeometry(ip, headUuid, widgetUuid, geometry) {
   return { previous, applied: geometry, confirmed, result };
 }
 
+// Toggle the `visible` flag on every element of a widget, preserving everything else. Tests
+// whether hiding a widget's contents (rather than resizing it) makes it render nothing —
+// transparent — so a fullscreen window underneath shows through despite the fixed z-order.
+// Read-modify-write; reads back the stored visible flags so we can tell if the board honored
+// `visible:false` at all. Part of the geometry/fullscreen PROBE.
+export async function setWidgetElementsVisible(ip, headUuid, widgetUuid, visible) {
+  const cur = await getHeadWidget(ip, headUuid, widgetUuid);
+  const change = {
+    elements: (cur.elements || []).map((el) => ({ ...el, visible })),
+    geometry: cur.geometry,
+    groupUuid: cur.groupUuid || '',
+    name: cur.name || '',
+    properties: cur.properties || { borderColor: '', borderSize: '' },
+  };
+  const result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
+    method: 'PUT', body: JSON.stringify(change),
+  });
+  let confirmed = null;
+  try { const after = await getHeadWidget(ip, headUuid, widgetUuid); confirmed = (after.elements || []).map((e) => e.visible); }
+  catch { /* read-back failed */ }
+  log({
+    ip, method: 'VIS', path: `/heads/${headUuid}/widgets/${widgetUuid}`, status: null, ok: true,
+    detail: `set elements visible=${visible}${confirmed ? ` · board now [${confirmed.join(',')}]` : ''}`,
+  });
+  return { visible, confirmed, result };
+}
+
 // One head's full definition (HeadGet), including its ordered `widgets` UUID list — the only
 // z-order lever the API exposes.
 export async function getHead(ip, headUuid) {

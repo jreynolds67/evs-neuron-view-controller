@@ -1565,6 +1565,9 @@ function gpWidgetRow(cardId, headUuid, w) {
       <span class="muted" style="font-size:12px">z-order:</span>
       <button class="btn sm ghost gp-front">Bring to front (end of list)</button>
       <button class="btn sm ghost gp-back">Send to back (start of list)</button>
+      <span class="muted" style="font-size:12px; margin-left:8px">contents:</span>
+      <button class="btn sm ghost gp-elemoff">Hide (elements off)</button>
+      <button class="btn sm ghost gp-elemon">Show (elements on)</button>
     </div>
     <div class="mono gp-out" style="font-size:12px; margin-top:6px; color:var(--ink-dim); word-break:break-word"></div>`;
   const out = box.querySelector('.gp-out');
@@ -1652,6 +1655,28 @@ function gpWidgetRow(cardId, headUuid, w) {
   box.querySelector('.gp-back').addEventListener('click', () => reorder('back'));
   box.querySelector('.gp-solo').addEventListener('click', () => gpSolo(w.uuid));
   box.querySelector('.gp-hideothers').addEventListener('click', () => gpHideOthers(w.uuid));
+
+  const setVisible = async (visible) => {
+    out.textContent = visible ? 'Showing elements…' : 'Hiding elements…';
+    try {
+      const r = await fetch(
+        `/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/widgets/${encodeURIComponent(w.uuid)}/visible`,
+        { method: 'POST', headers: headers(), body: JSON.stringify({ visible }) });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        out.innerHTML = `<span class="stor-err">REJECTED — HTTP ${r.status}: ${esc(body.error || 'failed')}`
+          + `${body.detail ? ' · ' + esc(String(body.detail)) : ''}</span>`;
+        refreshLog();
+        return;
+      }
+      const stored = Array.isArray(body.confirmed) ? `board stored visible=[${esc(body.confirmed.join(','))}]` : 'no read-back';
+      out.innerHTML = `<span style="color:var(--fire)">ACCEPTED — elements visible=${visible}, ${stored}. `
+        + `Check the wall: did this window ${visible ? 'come back' : 'go transparent (fullscreen behind showing through), or black/bordered'}?</span>`;
+      refreshLog();
+    } catch (e) { out.innerHTML = `<span class="stor-err">${esc(e.message)}</span>`; }
+  };
+  box.querySelector('.gp-elemoff').addEventListener('click', () => setVisible(false));
+  box.querySelector('.gp-elemon').addEventListener('click', () => setVisible(true));
   return box;
 }
 
