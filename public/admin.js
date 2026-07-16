@@ -1153,6 +1153,8 @@ const gpRestoreOrderBtn = $('gpRestoreOrder');
 if (gpRestoreOrderBtn) gpRestoreOrderBtn.addEventListener('click', gpRestoreOrder);
 const gpRestoreAllBtn = $('gpRestoreAll');
 if (gpRestoreAllBtn) gpRestoreAllBtn.addEventListener('click', gpRestoreAllSizes);
+const gpSoloRestoreBtn = $('gpSoloRestore');
+if (gpSoloRestoreBtn) gpSoloRestoreBtn.addEventListener('click', gpSoloRestore);
 
 // ---- Global per-head snapshot filters -------------------------------------
 
@@ -1493,6 +1495,7 @@ async function gpLoadHeads() {
   const headSel = $('gpHead');
   $('gpWidgets').innerHTML = ''; $('gpState').textContent = '';
   const ro = $('gpRestoreOrder'); if (ro) ro.disabled = true;
+  const sr = $('gpSoloRestore'); if (sr) sr.disabled = true;
   headSel.innerHTML = '<option value="">— select a head —</option>';
   if (!cardId) return;
   headSel.innerHTML = '<option value="">Loading…</option>';
@@ -1531,6 +1534,9 @@ async function gpLoadWidgets() {
     gpCtx = { cardId, headUuid, widgets };
     const ro = $('gpRestoreOrder'); if (ro) ro.disabled = !gpSavedOrder.has(headUuid);
     gpUpdateRestoreAll();
+    // Reflect whether a delete-solo capture is currently held server-side (survives page reload).
+    fetch(`/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/solo-state`, { headers: headers() })
+      .then((r) => r.json()).then((s) => { const b = $('gpSoloRestore'); if (b) b.disabled = !s.soloed; }).catch(() => {});
     $('gpState').textContent = `${widgets.length} widget(s) — changes are live and reversible`;
     if (!widgets.length) { host.innerHTML = '<div class="muted">No widgets on this head.</div>'; return; }
     widgets.forEach((w) => host.appendChild(gpWidgetRow(cardId, headUuid, w)));
@@ -1547,7 +1553,8 @@ function gpWidgetRow(cardId, headUuid, w) {
       <span class="muted" style="font-size:11px; font-weight:400">${kind}${types}</span></div>
     <div class="muted mono" style="font-size:12px">current: <span class="gp-cur"></span></div>
     <div class="inline" style="gap:6px; margin-top:8px; flex-wrap:wrap">
-      <button class="btn sm gp-solo">Solo (full + hide others)</button>
+      <button class="btn sm gp-solodel">Solo (DELETE others)</button>
+      <button class="btn sm ghost gp-solo">Solo (full + hide others)</button>
       <button class="btn sm ghost gp-hideothers">Hide others (keep this)</button>
       <button class="btn sm ghost gp-full">Set fullscreen (0,0,1,1)</button>
       <button class="btn sm ghost gp-hide">Hide (0,0,0,0)</button>
@@ -1677,7 +1684,54 @@ function gpWidgetRow(cardId, headUuid, w) {
   };
   box.querySelector('.gp-elemoff').addEventListener('click', () => setVisible(false));
   box.querySelector('.gp-elemon').addEventListener('click', () => setVisible(true));
+  box.querySelector('.gp-solodel').addEventListener('click', () => gpSoloDelete(w.uuid, out));
   return box;
+}
+
+// SOLO via DELETE — the real prototype: capture the head, delete every other widget, fullscreen
+// this one. Destructive but reversible via "Restore (recreate deleted)" (capture is held on the
+// server). Confirm first, since it removes live windows.
+async function gpSoloDelete(targetUuid, out) {
+  const { cardId, headUuid } = gpCtx;
+  if (!cardId || !headUuid) return;
+  if (!confirm('Solo via DELETE?\n\nThis DELETES every other window on this head and makes this '
+    + 'one fullscreen. It is reversible with “Restore (recreate deleted)” as long as the server '
+    + 'stays up. Use a spare/off-air head.')) return;
+  $('gpState').textContent = 'Soloing via delete (capturing, deleting others, fullscreen)…';
+  try {
+    const r = await fetch(`/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/solo-delete`,
+      { method: 'POST', headers: headers(), body: JSON.stringify({ targetUuid }) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (out) out.innerHTML = `<span class="stor-err">FAILED — HTTP ${r.status}: ${esc(body.error || 'failed')}</span>`;
+      $('gpState').textContent = 'Solo-delete failed.';
+      refreshLog();
+      return;
+    }
+    const errs = (body.errors && body.errors.length) ? ` · ${body.errors.length} error(s)` : '';
+    $('gpState').textContent = `Deleted ${body.deleted} of ${body.captured}, fullscreened the survivor${errs}. `
+      + 'Check the wall: is it a CLEAN fullscreen now? Then “Restore (recreate deleted)”.';
+    refreshLog();
+    gpLoadWidgets(); // head now has one widget; refresh + pick up solo-state
+  } catch (e) { $('gpState').textContent = 'Error: ' + e.message; }
+}
+
+// Restore a delete-solo: recreate the deleted widgets from the server-held capture.
+async function gpSoloRestore() {
+  const { cardId, headUuid } = gpCtx;
+  if (!cardId || !headUuid) return;
+  $('gpState').textContent = 'Restoring (recreating deleted windows)…';
+  try {
+    const r = await fetch(`/api/admin/cards/${encodeURIComponent(cardId)}/heads/${encodeURIComponent(headUuid)}/solo-restore`,
+      { method: 'POST', headers: headers() });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { $('gpState').textContent = `Restore failed: ${body.error || r.status}`; refreshLog(); return; }
+    const errs = (body.errors && body.errors.length) ? ` · ${body.errors.length} error(s)` : '';
+    $('gpState').textContent = `Recreated ${body.recreated} window(s), resized the survivor back${errs}. `
+      + 'Check the wall: does the mosaic match the original?';
+    refreshLog();
+    gpLoadWidgets();
+  } catch (e) { $('gpState').textContent = 'Error: ' + e.message; }
 }
 
 // Hide every window EXCEPT the target, leaving the target untouched. Lets you separate the two

@@ -19,6 +19,7 @@ import {
   extractSnapshotHeadWidgets, getSnapshotModelCached, buildSnapshotWidgetIndex,
   getInputGroups, setWidgetGroup, setWidgetGeometry,
   moveHeadWidgetOrder, setHeadWidgetOrder, setWidgetElementsVisible,
+  deleteHeadWidget, createHeadWidget,
 } from './board.js';
 import { getEntries, clear as clearLog, log } from './logger.js';
 import { startShareSweep, shareSweepStatus, runShareSweepNow, applyShareSweepConfig } from './sharesweep.js';
@@ -1013,6 +1014,72 @@ app.post('/api/admin/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/order', r
     const out = await moveHeadWidgetOrder(card.ip, req.params.headUuid, req.params.widgetUuid, position);
     res.json({ ok: true, position, ...out });
   } catch (e) { sendErr(res, e); }
+});
+
+// SOLO via DELETE (the real mechanism prototype): capture every widget on the head, DELETE all
+// but the target, then fullscreen the target. Capture is held SERVER-SIDE (in memory) so a page
+// reload can't strand the head with the mosaic gone. Restore recreates the deleted widgets.
+// NOTE: in-memory only for this probe — a container restart between solo and restore loses the
+// capture (recover by recalling a snapshot). The real feature would persist the capture.
+const soloCaptures = new Map(); // `${cardId}::${headUuid}` -> { widgets:[full WidgetGet], targetUuid, at }
+
+app.post('/api/admin/cards/:cardId/heads/:headUuid/solo-delete', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const targetUuid = req.body && req.body.targetUuid;
+  if (!targetUuid) return res.status(400).json({ error: 'targetUuid is required' });
+  const key = `${req.params.cardId}::${req.params.headUuid}`;
+  try {
+    const widgets = await getHeadWidgets(card.ip, req.params.headUuid);
+    if (!widgets.some((w) => w.uuid === targetUuid)) {
+      return res.status(404).json({ error: 'Target widget not found on this head' });
+    }
+    // Capture BEFORE any destructive change, so restore is always possible.
+    soloCaptures.set(key, { widgets, targetUuid, at: Date.now() });
+    const errors = [];
+    let deleted = 0;
+    for (const w of widgets) {
+      if (w.uuid === targetUuid) continue;
+      try { await deleteHeadWidget(card.ip, req.params.headUuid, w.uuid); deleted++; }
+      catch (e) { errors.push(`delete ${w.uuid}: ${e.message}`); }
+    }
+    // Now nothing else exists on the head — fullscreen the survivor.
+    const geo = await setWidgetGeometry(card.ip, req.params.headUuid, targetUuid, { x: 0, y: 0, width: 1, height: 1 });
+    res.json({ ok: true, captured: widgets.length, deleted, confirmed: geo.confirmed, errors });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Restore a soloed head: recreate every deleted widget from the capture and put the survivor
+// back to its original geometry. Recreated widgets get new UUIDs (expected).
+app.post('/api/admin/cards/:cardId/heads/:headUuid/solo-restore', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  const key = `${req.params.cardId}::${req.params.headUuid}`;
+  const cap = soloCaptures.get(key);
+  if (!cap) return res.status(404).json({ error: 'No solo capture to restore for this head' });
+  try {
+    const errors = [];
+    let recreated = 0, restored = 0;
+    for (const w of cap.widgets) {
+      if (w.uuid === cap.targetUuid) {
+        try { await setWidgetGeometry(card.ip, req.params.headUuid, cap.targetUuid, w.geometry); restored++; }
+        catch (e) { errors.push(`resize target: ${e.message}`); }
+        continue;
+      }
+      try { await createHeadWidget(card.ip, req.params.headUuid, w); recreated++; }
+      catch (e) { errors.push(`recreate ${w.name || w.uuid}: ${e.message}`); }
+    }
+    soloCaptures.delete(key);
+    res.json({ ok: true, recreated, restored, errors });
+  } catch (e) { sendErr(res, e); }
+});
+
+// Whether a solo capture is currently held for a head (so the UI can offer Restore after reload).
+app.get('/api/admin/cards/:cardId/heads/:headUuid/solo-state', requireAdmin, (req, res) => {
+  const cap = soloCaptures.get(`${req.params.cardId}::${req.params.headUuid}`);
+  res.json({ soloed: !!cap, captured: cap ? cap.widgets.length : 0 });
 });
 
 // Toggle a widget's element visibility. Body: { visible: bool }. Tests hiding by transparency

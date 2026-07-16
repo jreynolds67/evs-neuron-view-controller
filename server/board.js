@@ -539,6 +539,28 @@ export async function setWidgetElementsVisible(ip, headUuid, widgetUuid, visible
   return { visible, confirmed, result };
 }
 
+// Delete one widget from a head (DELETE /heads/{head}/widgets/{widget}). Unlike hiding, this
+// actually REMOVES the widget from the render — the key to a clean fullscreen (a head with one
+// widget has nothing else to draw). Destructive: the caller must have captured the widget's full
+// definition first if it intends to recreate it.
+export async function deleteHeadWidget(ip, headUuid, widgetUuid) {
+  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, { method: 'DELETE' });
+}
+
+// Recreate a widget on a head (POST /heads/{head}/widgets) from a captured WidgetGet. The board
+// assigns a NEW uuid (fine — this app never persists widget UUIDs). Body is a WidgetChange
+// (WidgetGet minus uuid). Returns the created WidgetGet (with its new uuid).
+export async function createHeadWidget(ip, headUuid, widget) {
+  const change = {
+    elements: widget.elements || [],
+    geometry: widget.geometry,
+    groupUuid: widget.groupUuid || '',
+    name: widget.name || '',
+    properties: widget.properties || { borderColor: '', borderSize: '' },
+  };
+  return boardFetch(ip, `/heads/${headUuid}/widgets`, { method: 'POST', body: JSON.stringify(change) });
+}
+
 // One head's full definition (HeadGet), including its ordered `widgets` UUID list — the only
 // z-order lever the API exposes.
 export async function getHead(ip, headUuid) {
