@@ -570,7 +570,7 @@ app.post('/api/panel/cards/:cardId/snapshots/:snapUuid/restore', async (req, res
 // write is best-effort — a solo/unsolo shouldn't abort because one widget hiccuped). Far faster
 // than sequential awaits when a head has many windows, and order is irrelevant here (these heads
 // have no overlap/z-order), so recreating in parallel is safe.
-async function runPool(items, worker, concurrency = 6) {
+async function runPool(items, worker, concurrency = 16) {
   let i = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (i < items.length) {

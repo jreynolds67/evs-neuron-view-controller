@@ -766,11 +766,7 @@ function addLongPress(el, handler, ms = 500) {
   const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
   el.addEventListener('pointerdown', (e) => {
     fired = false; sx = e.clientX; sy = e.clientY; cancel();
-    timer = setTimeout(() => {
-      fired = true; timer = null;
-      try { navigator.vibrate && navigator.vibrate(40); } catch {} // haptic "hold registered"
-      handler();
-    }, ms);
+    timer = setTimeout(() => { fired = true; timer = null; handler(); }, ms);
   });
   el.addEventListener('pointermove', (e) => {
     if (timer && (Math.abs(e.clientX - sx) > 12 || Math.abs(e.clientY - sy) > 12)) cancel();
@@ -781,9 +777,9 @@ function addLongPress(el, handler, ms = 500) {
 }
 
 // A full-editor "working" overlay, shown the INSTANT a hold registers and held until the board
-// finishes and the view redraws. Combined with the haptic buzz, it tells the operator the hold
-// took and they can release — covering the natural delay while the board rebuilds the layout.
-// It's inside fsBody, so renderFullscreen() (which clears fsBody) removes it automatically.
+// finishes and the view redraws. It tells the operator the hold took and they can release —
+// covering the natural delay while the board rebuilds the layout. It's inside fsBody, so
+// renderFullscreen() (which clears fsBody) removes it automatically.
 function showFsWorking(msg) {
   const body = $('fsBody');
   if (!body) return;

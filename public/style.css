@@ -293,13 +293,13 @@ body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
   margin: 0 auto;
 }
 .fs-window {
-  position: absolute; background: rgba(63,182,255,0.08);
-  border: 2px solid var(--accent); border-radius: 4px; color: var(--ink);
+  position: absolute; background: rgba(41,209,124,0.08);
+  border: 2px solid var(--fire); border-radius: 4px; color: var(--ink);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; cursor: pointer; padding: 4px; overflow: hidden;
 }
-.fs-window:active { background: rgba(63,182,255,0.18); }
-.fs-window.editing { background: rgba(63,182,255,0.22); border-color: var(--arm); }
+.fs-window:active { background: rgba(41,209,124,0.18); }
+.fs-window.editing { background: rgba(41,209,124,0.22); border-color: var(--arm); }
 .fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
 .fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
