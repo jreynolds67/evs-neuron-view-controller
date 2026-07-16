@@ -974,6 +974,11 @@ app.get('/api/admin/cards/:cardId/heads/:headUuid/widgets', requireAdmin, async 
     const widgets = await getHeadWidgets(card.ip, req.params.headUuid);
     res.json((widgets || []).map((w) => ({
       uuid: w.uuid, name: w.name || '', groupUuid: w.groupUuid || '', geometry: w.geometry || null,
+      // Element types (box/pip/audiobar/clock) + whether it's bound to an input group. A `pip`
+      // element and/or a non-empty groupUuid marks a LIVE VIDEO widget, which appears to sit on
+      // a compositing plane above graphics — the crux of why fullscreen doesn't cover them.
+      elementTypes: Array.isArray(w.elements) ? [...new Set(w.elements.map((el) => el.type).filter(Boolean))] : [],
+      hasGroup: !!(w.groupUuid && w.groupUuid !== '00000000-0000-0000-0000-000000000000'),
     })));
   } catch (e) { sendErr(res, e); }
 });

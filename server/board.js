@@ -497,11 +497,19 @@ export async function setWidgetGeometry(ip, headUuid, widgetUuid, geometry) {
     method: 'PUT',
     body: JSON.stringify(change),
   });
+  // Read back what the board ACTUALLY stored. A geometry that comes back different from what we
+  // sent (reverted to the old value, or clamped) means the board didn't take the change — which
+  // is a completely different failure from "stored fine but still renders". This distinction is
+  // what the probe needs, so surface the confirmed geometry to the caller.
+  let confirmed = null;
+  try { const after = await getHeadWidget(ip, headUuid, widgetUuid); confirmed = after.geometry || null; }
+  catch { /* read-back failed; leave confirmed null */ }
   log({
     ip, method: 'GEOM', path: `/heads/${headUuid}/widgets/${widgetUuid}`, status: null, ok: true,
-    detail: `geometry -> x:${geometry.x} y:${geometry.y} w:${geometry.width} h:${geometry.height}`,
+    detail: `set x:${geometry.x} y:${geometry.y} w:${geometry.width} h:${geometry.height}`
+      + (confirmed ? ` · board now x:${confirmed.x} y:${confirmed.y} w:${confirmed.width} h:${confirmed.height}` : ''),
   });
-  return { previous, applied: geometry, result };
+  return { previous, applied: geometry, confirmed, result };
 }
 
 // One head's full definition (HeadGet), including its ordered `widgets` UUID list — the only

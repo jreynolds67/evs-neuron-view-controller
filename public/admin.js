@@ -1510,6 +1510,13 @@ function gpFmtGeom(g) {
   const r = (n) => (typeof n === 'number' ? Math.round(n * 1000) / 1000 : n);
   return `x:${r(g.x)} y:${r(g.y)} w:${r(g.width)} h:${r(g.height)}`;
 }
+// Geometry equality with a small float tolerance — used to tell "board stored what we sent"
+// from "board reverted/clamped it".
+function gpGeomEq(a, b) {
+  if (!a || !b) return false;
+  const close = (x, y) => Math.abs((+x || 0) - (+y || 0)) < 0.0005;
+  return close(a.x, b.x) && close(a.y, b.y) && close(a.width, b.width) && close(a.height, b.height);
+}
 
 async function gpLoadWidgets() {
   const cardId = $('gpCard').value, headUuid = $('gpHead').value;
@@ -1533,8 +1540,11 @@ async function gpLoadWidgets() {
 function gpWidgetRow(cardId, headUuid, w) {
   const box = document.createElement('div');
   box.className = 'syncdiag-card';
+  const kind = w.hasGroup ? '● VIDEO' : '○ graphic';
+  const types = (w.elementTypes && w.elementTypes.length) ? ' · ' + esc(w.elementTypes.join(', ')) : '';
   box.innerHTML = `
-    <div class="syncdiag-title">${esc(w.name || w.uuid)}</div>
+    <div class="syncdiag-title">${esc(w.name || w.uuid)}
+      <span class="muted" style="font-size:11px; font-weight:400">${kind}${types}</span></div>
     <div class="muted mono" style="font-size:12px">current: <span class="gp-cur"></span></div>
     <div class="inline" style="gap:6px; margin-top:8px; flex-wrap:wrap">
       <button class="btn sm gp-solo">Solo (full + hide others)</button>
@@ -1577,11 +1587,19 @@ function gpWidgetRow(cardId, headUuid, w) {
       }
       // Capture the original geometry the FIRST time we move this widget, so Restore is exact.
       if (body.previous && !gpSaved.has(w.uuid)) gpSaved.set(w.uuid, body.previous);
-      curEl.textContent = gpFmtGeom(body.applied || geometry);
+      curEl.textContent = gpFmtGeom(body.confirmed || body.applied || geometry);
       restoreBtn.disabled = !gpSaved.has(w.uuid);
       gpUpdateRestoreAll();
-      out.innerHTML = `<span style="color:var(--fire)">ACCEPTED — HTTP ${r.status} → ${esc(gpFmtGeom(body.applied || geometry))}. `
-        + `Check the head: is it truly fullscreen, and are the other windows hidden or bleeding through?</span>`;
+      // Compare what we sent to what the board actually stored. A mismatch means the board
+      // silently reverted/clamped the write — the key thing to know for feasibility.
+      const stuck = gpGeomEq(body.confirmed, geometry);
+      if (body.confirmed && !stuck) {
+        out.innerHTML = `<span class="stor-anom">STORED DIFFERENTLY — sent ${esc(gpFmtGeom(geometry))}, `
+          + `board kept ${esc(gpFmtGeom(body.confirmed))}. The board did NOT accept this geometry.</span>`;
+      } else {
+        out.innerHTML = `<span style="color:var(--fire)">ACCEPTED — HTTP ${r.status}, board confirms ${esc(gpFmtGeom(body.confirmed || geometry))}. `
+          + `Now check the wall: did the window actually move/hide, or does it still render?</span>`;
+      }
       refreshLog();
       return true;
     } catch (e) { out.innerHTML = `<span class="stor-err">${esc(e.message)}</span>`; return false; }
