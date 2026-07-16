@@ -8,7 +8,11 @@
   --ink-faint: #5b6672;
   --accent: #3fb6ff;      /* selection / active */
   --arm: #ff7a1a;         /* armed, about to fire */
-  --fire: #29d17c;        /* success */
+  --fire: #29d17c;        /* success / the green used for video windows everywhere */
+  /* Canonical green fill for video windows — previews, the enlarged editor, and the fullscreen
+     ("solo") view all use this so the green matches. Border is always var(--fire). */
+  --pip-fill: rgba(41, 209, 124, 0.16);
+  --pip-fill-strong: rgba(41, 209, 124, 0.30); /* pressed-state highlight */
   --danger: #ff4d4d;
   --radius: 10px;
   --touch: 76px;          /* minimum touch target height */
@@ -293,13 +297,13 @@ body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
   margin: 0 auto;
 }
 .fs-window {
-  position: absolute; background: rgba(41,209,124,0.08);
+  position: absolute; background: var(--pip-fill);
   border: 2px solid var(--fire); border-radius: 4px; color: var(--ink);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; cursor: pointer; padding: 4px; overflow: hidden;
 }
-.fs-window:active { background: rgba(41,209,124,0.18); }
-.fs-window.editing { background: rgba(41,209,124,0.22); border-color: var(--arm); }
+.fs-window:active { background: var(--pip-fill-strong); }
+.fs-window.editing { background: var(--pip-fill); border-color: var(--arm); }
 .fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
 .fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -319,7 +323,7 @@ body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
    shows how to go back. */
 .fs-overlay.soloed .fs-window {
   border-color: var(--fire); border-width: 3px;
-  background: rgba(41,209,124,0.16);
+  background: var(--pip-fill);
 }
 .fs-overlay.soloed .fs-win-num,
 .fs-overlay.soloed .fs-win-name { display: none; }

@@ -83,7 +83,9 @@ function cardEl({ k, v, uuid, onClick, selected }) {
 const SVGNS = 'http://www.w3.org/2000/svg';
 const ELEMENT_STYLE = {
   box:      { fill: 'rgba(63,182,255,0.10)', stroke: 'var(--accent)' },
-  pip:      { fill: 'rgba(41,209,124,0.12)', stroke: 'var(--fire)' },
+  // Green (pip = video) matches the enlarged/fullscreen windows: fill mirrors CSS --pip-fill
+  // (rgba(41,209,124,0.16)); stroke is var(--fire). Keep this fill value in sync with --pip-fill.
+  pip:      { fill: 'rgba(41,209,124,0.16)', stroke: 'var(--fire)' },
   audiobar: { fill: 'rgba(255,122,26,0.14)', stroke: 'var(--arm)' },
   clock:    { fill: 'rgba(139,152,165,0.14)', stroke: 'var(--ink-dim)' },
 };
