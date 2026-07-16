@@ -267,9 +267,9 @@ body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
 .card-with-preview { position: relative; }
 .expand-btn {
   position: absolute; top: 6px; right: 6px; z-index: 2;
-  width: 40px; height: 40px; border-radius: 8px;
+  width: 56px; height: 56px; border-radius: 10px;
   background: rgba(4,7,11,0.7); border: 1px solid var(--line); color: var(--ink);
-  font-size: 20px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+  font-size: 28px; line-height: 1; cursor: pointer; display: grid; place-items: center;
 }
 .expand-btn:active { transform: scale(0.94); }
 
