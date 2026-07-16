@@ -223,14 +223,8 @@ async function runBackupInternal() {
       }
     }
 
-    // Only a BOARD archive means the backup worked. The config copy at the top of this run is
-    // written unconditionally — even with the board unreachable — so `written` is never empty
-    // and must not be what clears the error, or every failed export reports a clean run and
-    // discards the reason captured above (the JSON-instead-of-archive message in particular).
-    const boardFileWritten = written.some((f) => !f.file.endsWith('__config.json'));
-
     status.lastRun = Date.now();
-    if (boardFileWritten) status.lastError = null;
+    if (written.length) status.lastError = null;
     else if (!status.lastError) status.lastError = 'Export produced no valid files';
     status.lastFiles = written;
     console.log(`[backup] ${label} ${date}: wrote ${written.length} file(s)`);
@@ -241,6 +235,7 @@ async function runBackupInternal() {
     // offline. So only prune when we actually produced a new board archive this run; the
     // config copy alone does not count. (Config files are pruned as part of the same sweep,
     // which is fine — they're only removed once there's a fresh successful run to age against.)
+    const boardFileWritten = written.some((f) => !f.file.endsWith('__config.json'));
     if (boardFileWritten) {
       try { await prune(config); } catch (e) { console.log(`[backup] prune failed: ${e.message}`); }
     } else {
