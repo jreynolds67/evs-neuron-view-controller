@@ -566,19 +566,23 @@ app.post('/api/panel/cards/:cardId/snapshots/:snapUuid/restore', async (req, res
 // (solostore) so any panel can restore it and a redeploy can't strand an on-air head. The client
 // disables source-repointing while soloed, so nothing else changes the survivor meanwhile.
 
-// Run async tasks over `items` with bounded concurrency, swallowing individual failures (each
-// write is best-effort — a solo/unsolo shouldn't abort because one widget hiccuped). Far faster
-// than sequential awaits when a head has many windows, and order is irrelevant here (these heads
-// have no overlap/z-order), so recreating in parallel is safe.
+// Run async tasks over `items` with bounded concurrency. An individual failure does NOT abort the
+// run — a solo/unsolo shouldn't stop dead because one widget hiccuped — but failures ARE counted
+// and returned, so the caller can tell the operator rather than report success over a head that
+// is visibly wrong. Far faster than sequential awaits when a head has many windows, and order is
+// irrelevant here (these heads have no overlap/z-order), so running in parallel is safe.
+// Returns the number of items whose worker threw.
 async function runPool(items, worker, concurrency = 16) {
   let i = 0;
+  let failed = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (i < items.length) {
       const idx = i++;
-      try { await worker(items[idx], idx); } catch { /* best-effort */ }
+      try { await worker(items[idx], idx); } catch { failed++; }
     }
   });
   await Promise.all(runners);
+  return failed;
 }
 
 app.post('/api/panel/cards/:cardId/heads/:headUuid/solo', async (req, res) => {
@@ -597,12 +601,22 @@ app.post('/api/panel/cards/:cardId/heads/:headUuid/solo', async (req, res) => {
     // Persist the FULL current layout BEFORE any destructive change, so restore is always
     // possible even across a redeploy. If this throws, nothing has been deleted yet.
     await setSolo(cardId, headUuid, { targetUuid: targetWidgetUuid, widgets, at: Date.now() });
-    // Delete the other windows in parallel (bounded) — the persisted capture lets un-solo
-    // recreate any that fail regardless.
-    await runPool(widgets.filter((w) => w.uuid !== targetWidgetUuid),
-      (w) => deleteHeadWidget(card.ip, headUuid, w.uuid));
+    // Delete the other windows in parallel (bounded). A window whose delete FAILS stays on the
+    // head and keeps rendering (you cannot hide one on this firmware), so the operator is looking
+    // at a broken fullscreen — count the failures and say so rather than reporting success.
+    // Un-solo reconciles against the live head, so holding again still restores cleanly from here.
+    const others = widgets.filter((w) => w.uuid !== targetWidgetUuid);
+    const failed = await runPool(others, (w) => deleteHeadWidget(card.ip, headUuid, w.uuid));
     await setWidgetFullscreenVideoOnly(card.ip, headUuid, targetWidgetUuid);
     previewCache.invalidate(`${card.ip}::${headUuid}`);
+    if (failed) {
+      return res.status(502).json({
+        error: `Fullscreen incomplete — the card didn’t remove ${failed} of ${others.length} `
+          + `window${others.length === 1 ? '' : 's'}, so ${failed === 1 ? 'it is' : 'they are'} `
+          + 'still on the head. Press and hold again to restore the layout, then try again.',
+        code: 'SOLO_PARTIAL',
+      });
+    }
     res.json({ ok: true });
   } catch (e) { sendPanelErr(res, e); }
 });
@@ -624,13 +638,27 @@ app.post('/api/panel/cards/:cardId/heads/:headUuid/unsolo', async (req, res) => 
       previewCache.invalidate(`${card.ip}::${headUuid}`);
       return res.json({ ok: true, restored: false, stale: true });
     }
-    // Recreate the deleted windows and put the survivor back to its captured original — in
-    // parallel (bounded), since this is the slow part on a big mosaic and order doesn't matter.
-    await runPool(cap.widgets, (w) => (w.uuid === cap.targetUuid)
-      ? setWidgetFull(card.ip, headUuid, cap.targetUuid, w)
+    // Reconcile against the LIVE head rather than assuming every non-target widget was deleted.
+    // If a delete failed during solo, that widget is STILL on the head, and blindly recreating it
+    // would leave two of it. Present (the target, plus any that survived a failed delete) -> put
+    // it back to its captured state; absent -> recreate it. Runs in parallel (bounded), since this
+    // is the slow part on a big mosaic and order doesn't matter.
+    const liveUuids = new Set(live.map((w) => w.uuid));
+    const failed = await runPool(cap.widgets, (w) => liveUuids.has(w.uuid)
+      ? setWidgetFull(card.ip, headUuid, w.uuid, w)
       : createHeadWidget(card.ip, headUuid, w));
+    // Clear the capture even if some writes failed. The windows we DID recreate carry NEW uuids,
+    // so a second un-solo would match none of them against the capture and duplicate the mosaic —
+    // a partial restore is a dead end by design, and the operator is pointed at a recall instead.
     await clearSolo(cardId, headUuid);
     previewCache.invalidate(`${card.ip}::${headUuid}`);
+    if (failed) {
+      return res.status(502).json({
+        error: `Restore incomplete — the card didn’t rebuild ${failed} of ${cap.widgets.length} `
+          + 'windows, so this head’s layout is wrong. Recall this head’s snapshot to rebuild it.',
+        code: 'UNSOLO_PARTIAL',
+      });
+    }
     res.json({ ok: true, restored: true });
   } catch (e) { sendPanelErr(res, e); }
 });

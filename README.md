@@ -89,9 +89,9 @@ Flow: **Head → Snapshot → (source head if ambiguous) → Confirm → Load**.
   individual windows (PiPs) to different input groups by number.
 - **Fullscreen a window ("solo")** — in the enlarged editor, **press and hold** a window to blow
   it up to fill the head, video-only (its UMD/clock/audio-meter overlays are stripped for a clean
-  full-frame source); **press and hold again** to restore the original mosaic. A held gesture
-  buzzes (haptic) and shows a "working" spinner the moment it registers, so the operator knows to
-  let go while the board redraws. The soloed view turns green, and a centered on-screen prompt
+  full-frame source); **press and hold again** to restore the original mosaic. A held gesture shows
+  a "working" spinner the moment it registers, so the operator knows to let go while the board
+  redraws. The soloed view turns green, and a centered on-screen prompt
   (not a disappearing toast) shows how to go back. Source-repointing is disabled while soloed.
   This is a **live, shared** change — every panel viewing that head sees it, any panel can
   restore it, and the state **persists** (see below) so a redeploy can't strand an on-air head.
