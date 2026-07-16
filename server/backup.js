@@ -267,18 +267,29 @@ async function writeAtomic(path, buf) {
 const BACKUP_RE = /^\d{4}-\d{2}-\d{2}(_\d{2}-\d{2}-\d{2})?__.+/;
 function isBackupFile(f) { return BACKUP_RE.test(f) && !f.endsWith('.tmp'); }
 
-// Classify a backup filename into a kind and its date key (the YYYY-MM-DD prefix).
-//   kind: 'config'  -> <date>__config.json           (app config snapshot)
-//         'zip'     -> <date>__<label>__individual.zip (per-snapshot bundle)
+// Classify a backup filename into a kind and two different grouping keys.
+//   kind: 'config'  -> <stamp>__config.json           (app config snapshot)
+//         'zip'     -> <stamp>__<label>__individual.zip (per-snapshot bundle)
 //         'board'   -> everything else (the full-board archive, incl. per-folder fallbacks)
-// The date key groups all files produced by one nightly run together.
+//
+// The two keys are deliberately NOT the same thing:
+//   dateKey (YYYY-MM-DD)           — groups a whole DAY. Retention keeps the N most recent
+//                                    DATES, so this must stay date-only.
+//   runKey  (YYYY-MM-DD_HH-MM-SS)  — identifies ONE run. Filenames carry a time (fileStamp)
+//                                    precisely so several backups a day stay distinct, so
+//                                    anything presenting files per-run must key on this.
+//                                    Grouping the UI by dateKey merged same-day runs into one
+//                                    row that could only address one file per kind — leaving
+//                                    the newest with no Delete button at all.
+// Legacy files with no time component fall back to the date for both.
 function classifyBackup(f) {
-  const m = f.match(/^(\d{4}-\d{2}-\d{2})/);
+  const m = f.match(/^(\d{4}-\d{2}-\d{2})(_\d{2}-\d{2}-\d{2})?/);
   const dateKey = m ? m[1] : '';
+  const runKey = m ? `${m[1]}${m[2] || ''}` : '';
   let kind = 'board';
   if (f.endsWith('__config.json')) kind = 'config';
   else if (f.endsWith('__individual.zip')) kind = 'zip';
-  return { kind, dateKey };
+  return { kind, dateKey, runKey };
 }
 
 // Retention has two independent rules, by design (see the backup runner):
@@ -332,8 +343,8 @@ export async function listBackups() {
     if (!isBackupFile(f)) continue;
     try {
       const s = await stat(join(BACKUP_DIR, f));
-      const { kind, dateKey } = classifyBackup(f);
-      out.push({ file: f, bytes: s.size, mtime: s.mtimeMs, kind, dateKey });
+      const { kind, dateKey, runKey } = classifyBackup(f);
+      out.push({ file: f, bytes: s.size, mtime: s.mtimeMs, kind, dateKey, runKey });
     } catch {}
   }
   return out.sort((a, b) => b.mtime - a.mtime);

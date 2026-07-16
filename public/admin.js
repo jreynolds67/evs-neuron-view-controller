@@ -1563,27 +1563,40 @@ function renderBackupFiles(files) {
   }
   if (!files.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">No backups yet.</td></tr>'; return; }
 
-  // Group files by their date key so each row is one nightly run, with the full-board
-  // archive, the snapshot zip, and the config snapshot in separate columns.
-  const byDate = new Map();
+  // Group files by their RUN (date + time), so each row is one backup run with its board
+  // archive, snapshot zip, and config snapshot in separate columns. Keyed on runKey, NOT the
+  // date: several runs in a day are distinct files, and grouping them by date merged them into
+  // one row whose buttons could only address a single file per kind — the newest silently had
+  // no Delete button. (Retention still groups by date; that's a separate key. See backup.js.)
+  //
+  // Each cell holds a LIST, not one file: a run whose whole-board export failed falls back to
+  // one board file PER FOLDER, so several files of the same kind can share a run. Every file on
+  // disk must get its own Download/Delete, or it becomes undeletable through the UI.
+  const byRun = new Map();
   for (const f of files) {
-    const key = f.dateKey || (f.file.match(/^(\d{4}-\d{2}-\d{2})/) || [])[1] || f.file;
-    if (!byDate.has(key)) byDate.set(key, { date: key, board: null, zip: null, config: null, mtime: f.mtime });
-    const row = byDate.get(key);
-    if (f.kind === 'zip') row.zip = f;
-    else if (f.kind === 'config') row.config = f;
-    else row.board = f;
+    const stamp = (f.file.match(/^(\d{4}-\d{2}-\d{2}(?:_\d{2}-\d{2}-\d{2})?)/) || [])[1];
+    const key = f.runKey || stamp || f.file;
+    if (!byRun.has(key)) {
+      byRun.set(key, {
+        date: f.dateKey || (stamp || '').slice(0, 10) || key,
+        board: [], zip: [], config: [], mtime: f.mtime,
+      });
+    }
+    const row = byRun.get(key);
+    if (f.kind === 'zip') row.zip.push(f);
+    else if (f.kind === 'config') row.config.push(f);
+    else row.board.push(f);
     row.mtime = Math.max(row.mtime, f.mtime);
   }
-  const rows = [...byDate.values()].sort((a, b) => b.mtime - a.mtime);
+  const rows = [...byRun.values()].sort((a, b) => b.mtime - a.mtime);
 
-  const cell = (f) => {
-    if (!f) return '<span class="muted">—</span>';
-    return `<div class="bk-cell">
+  const cell = (list) => {
+    if (!list || !list.length) return '<span class="muted">—</span>';
+    return list.map((f) => `<div class="bk-cell">
         <span class="bk-sz muted">${fmtBytes(f.bytes)}</span>
         <a class="btn sm ghost" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download title="${esc(f.file)}">Download</a>
         <button class="btn sm del" data-file="${esc(f.file)}">Delete</button>
-      </div>`;
+      </div>`).join('');
   };
 
   rows.forEach((r) => {
