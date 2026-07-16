@@ -123,8 +123,13 @@ Every restore goes through `restorePartial()` in `server/board.js`, which hard-c
 full-heads restore) is always `false`. An empty head map is refused rather than sent. There
 is no code path that sets any full-restore flag to `true`.
 
-If the app can't read the head list out of a snapshot's stored model on a given board, it
-**blocks the restore** rather than guessing a mapping or falling back to a full restore.
+If the app can't read the head list out of a snapshot's stored model on a given board, the
+operator UI **blocks the restore** rather than guessing a mapping — it will not offer a
+source head it couldn't parse. Note this particular block is client-side: the restore
+endpoint doesn't re-check `snapshotHeadUuid` against the parsed model. That is not a hole in
+the partials-only guarantee, which is structural and server-side (above) — an unparseable or
+bogus source head is simply rejected by the board. The per-head **snapshot filter**, by
+contrast, *is* re-enforced server-side at restore time.
 
 **Heads are bound by UUID** everywhere (panel assignments, layout grid, snapshot filters).
 This is rename-safe — renaming a head on the board keeps every binding intact. The tradeoff
@@ -199,9 +204,15 @@ Top-level keys (all siblings):
 | `backup` | Scheduled backup config: `{ enabled, cardId, timeHHMM, retentionDays }`. Managed on its own tab. |
 | `shareSweep` | Auto-share sweep config. Managed on its own tab. |
 
-`admin`, `backup`, and `shareSweep` are **server-authoritative**: the main config save
-never overwrites them (they have their own endpoints), so saving the main page can't clobber
-a backup time you set on another tab.
+`admin` is **server-authoritative**: it is never sent to the client and never accepted from
+it, so no config save can read or overwrite the credential.
+
+`backup` and `shareSweep` are **not** — they are edited inline on the Backups tab and arrive
+with the main config save, which validates and normalises them (and re-applies the sweep
+schedule immediately). The admin page is a single page with one config object and one Save,
+so its tabs can't clobber each other. But the save is a **whole-config replace with no
+version check**, so two admin sessions open at once are last-write-wins: the second Save
+silently reverts anything the first changed. Admin from one place at a time.
 
 ### Per-head snapshot filters
 
@@ -234,6 +245,11 @@ Generate a hash on any machine that has the repo:
 node server/auth.js "your-real-password"
 # -> scrypt$<salt>$<hash>   (copy the whole string)
 ```
+
+> **Never copy the `admin` block out of `config/config.example.json`.** That file is a
+> committed reference template, so its `passwordHash` is public — it hashes the password
+> **`changeme`**. Copying it into a live config gives your admin page a password that anyone
+> with repo access already knows. Always generate a fresh hash with the command above.
 
 **Edit the live config, not the example.** The server reads only `/data/config.json` on the
 Docker volume; `config/config.example.json` is a reference template and is never read at
@@ -367,9 +383,16 @@ There is no build step — the frontend is plain HTML/CSS/JS served straight fro
 - **Config edits need a restart.** Hand-edits to `/data/config.json` only take effect after
   the container restarts (config is cached at startup). Changes via the admin page apply
   immediately.
-- **Concurrent edits are guarded.** If two panels touch the same head at once (e.g. one
-  recalls a snapshot while another is editing input groups), the second write is rejected
-  cleanly with "Snapshot recalled by another user" rather than silently clobbering.
+- **Concurrent input-group edits are guarded.** Repointing a window is a read-modify-write
+  against a board API with no conditional writes, so `setWidgetGroup()` reads the widget
+  twice and aborts if it changed in between (or vanished) — the operator gets "Snapshot
+  recalled by another user" instead of a silent clobber. This covers the realistic case: one
+  panel recalling a snapshot while another edits input groups on the same head.
+- **Solo/un-solo is NOT guarded.** There is no per-head lock anywhere in the solo path, so
+  two panels press-and-holding the *same* head within the same operation can race — losing a
+  capture, or duplicating the mosaic. Judged outside real operating patterns and accepted
+  rather than fixed; see `REVIEW_NOTES.md` §6 for the exact windows and the ~10-line fix if
+  duplicated windows ever show up in the wild.
 
 ## Repository layout
 
