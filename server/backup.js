@@ -380,13 +380,12 @@ export function backupFilePath(file) {
 let lastRunDate = null;
 export function startBackupScheduler() {
   sweepTmp(); // clear any temp files left by a backup interrupted mid-write
-  const toMinutes = hhmmToMinutes;
   const tick = async () => {
     status.nextCheck = Date.now();
     const config = await loadConfig();
     const bcfg = config.backup || {};
     if (!bcfg.enabled || !(bcfg.cardId || bcfg.target) || !bcfg.timeHHMM) return;
-    const target = toMinutes(bcfg.timeHHMM);
+    const target = hhmmToMinutes(bcfg.timeHHMM);
     if (target == null) return;
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
@@ -428,7 +427,7 @@ export function startBackupScheduler() {
   (async () => {
     try {
       const cfg = await loadConfig();
-      const target = toMinutes((cfg.backup || {}).timeHHMM);
+      const target = hhmmToMinutes((cfg.backup || {}).timeHHMM);
       const now = new Date();
       if (target != null && (now.getHours() * 60 + now.getMinutes()) >= target) {
         lastRunDate = todayStamp();

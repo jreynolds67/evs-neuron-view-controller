@@ -69,7 +69,19 @@ async function saveConfig() {
     const res = await fetch('/api/admin/config', {
       method: 'PUT', headers: headers(), body: JSON.stringify(config),
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+    const body = await res.json().catch(() => ({}));
+    // A stale save is refused rather than silently reverting the other session's work. Say so
+    // loudly and persistently: a toast disappears in 3s, and this one costs the admin their
+    // unsaved edits if they reload without exporting first.
+    if (res.status === 409 && body.code === 'CONFIG_STALE') {
+      $('saveState').textContent = 'NOT SAVED — another admin session changed the config.';
+      toast('Not saved — config changed elsewhere', 'err');
+      alert(body.error);
+      return;
+    }
+    if (!res.ok) throw new Error(body.error || res.status);
+    // Adopt the new token, or this window's NEXT save would be refused as stale.
+    if (typeof body.configVersion === 'number') config.configVersion = body.configVersion;
     $('saveState').textContent = 'Saved ' + new Date().toLocaleTimeString();
     toast('Configuration saved', 'ok');
   } catch (e) { toast('Save failed: ' + e.message, 'err'); }
@@ -1301,7 +1313,12 @@ $('importFile').addEventListener('change', async (e) => {
     if (!confirm('Replace the current editor contents with this backup? '
       + 'Nothing is saved to the server until you click "Save config".')) return;
 
+    // Keep the token from the config THIS page loaded — an import replaces content, not our
+    // place in the save sequence. Adopting the exported file's stale token would make the next
+    // Save fail as a phantom conflict (or, if it happened to match, defeat the check).
+    const currentVersion = config.configVersion;
     config = parsed;
+    config.configVersion = currentVersion;
     config.cards ||= []; config.panels ||= [];
     config.headFilters ||= {};
     config.panelGroups ||= [];
@@ -1647,6 +1664,9 @@ $('bkRun').addEventListener('click', async () => {
     // Save doesn't push the un-normalised screen values back over them.
     const saved = await r.json();
     if (saved && saved.config) config.backup = saved.config;
+    // This endpoint writes config too, so it bumps the concurrency token. Adopt it or the next
+    // main "Save config" from this window would be refused as stale.
+    if (saved && typeof saved.configVersion === 'number') config.configVersion = saved.configVersion;
     const s = await fetch('/api/admin/backup/run', { method: 'POST', headers: headers() }).then(r => r.json());
     $('bkState').textContent = s.lastError ? `Error: ${s.lastError}` : `Wrote ${(s.lastFiles || []).length} file(s)`;
     // Refresh only the file list, not the whole form, so the selection is preserved.

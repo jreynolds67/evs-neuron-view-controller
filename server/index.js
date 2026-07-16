@@ -9,7 +9,7 @@ import { unlink } from 'node:fs/promises';
 
 import {
   loadConfig, saveConfig, getCardById, getPanelByIp,
-  getPanelHead, resolveAllowedSnapshots,
+  getPanelHead, resolveAllowedSnapshots, isConfigAuthoritative,
 } from './config.js';
 import {
   getSelf, getSnapshotInfo, getSnapshotMeta, getStorageStatus,
@@ -118,6 +118,31 @@ function sendPanelErr(res, e) {
     ? 'The card didn’t respond as expected. Please try again — if it keeps happening, tell an engineer.'
     : 'The card couldn’t complete that request. Please try again — if it keeps happening, tell an engineer.';
   res.status(status).json({ error: generic, code: e.code || null });
+}
+
+// Path parameters that get spliced into a BOARD API url must be real UUIDs before they go
+// anywhere near boardFetch. Express decodes %2F, so an unvalidated one can smuggle extra path
+// segments ("x%2F..%2Fheads") and steer a board GET/POST to an arbitrary endpoint — routing
+// around the choke point this server exists to be. It needs a registered panel IP first, so
+// this isn't a hole an outsider can reach, but the choke point should hold regardless.
+//
+// Scoped deliberately to the two params that actually reach a board url:
+//   snapUuid   -> /snapshots/{snapUuid}/...      (heads, previews, restore)
+//   widgetUuid -> /heads/{h}/widgets/{widgetUuid} (group repoint)
+// NOT headUuid: it's already constrained by having to string-match a stored assignment, and on
+// the snapshot-scoped preview route it's only ever used as a Map key. The API spec never
+// declares `format: uuid` on anything, so the strict shape is an observation about this
+// firmware, not a contract — and it's one the app already depends on (normalizeSnapshotEntry
+// and extractSnapshotHeads both drop non-UUID ids outright, so snapshots simply would not work
+// if it were false). Widening this to live head ids would add risk without adding cover.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+for (const name of ['snapUuid', 'widgetUuid']) {
+  app.param(name, (req, res, next, value) => {
+    if (!UUID_RE.test(value)) {
+      return res.status(400).json({ error: 'That item is no longer valid — go back and try again.' });
+    }
+    return next();
+  });
 }
 
 // --- panel-facing API ------------------------------------------------------
@@ -289,8 +314,11 @@ app.get('/api/panel/cards/:cardId/heads/:headUuid/snapshots', async (req, res) =
     // Board activity for the panel's "board busy" hint. On 1.13 info.state no longer exists
     // (it moved to /storage/status), so read it via the compat helper rather than passing
     // through a field that is always undefined on current firmware.
+    // Reuse the `info` fetched at the top of this handler: on 1.10 the busy state lives on that
+    // very response, so re-fetching it here made every snapshot listing pull the whole snapshot
+    // list from the board twice.
     let boardState = null;
-    try { boardState = await readBoardBusyState(card.ip); } catch { /* non-fatal */ }
+    try { boardState = await readBoardBusyState(card.ip, info); } catch { /* non-fatal */ }
     res.json({ state: boardState, snapshots: metas });
   } catch (e) { sendPanelErr(res, e); }
 });
@@ -425,15 +453,21 @@ const BUSY_LEGACY_RE = /import|export|sync|creating|updating|deleting|not enough
 
 // Return a human-readable busy state for a board, or null if idle/unknown.
 // API 1.13: activity lives on GET /storage/status. API 1.10: state lives on GET /snapshots.
-async function readBoardBusyState(ip) {
+//
+// `info` is an optional, already-fetched GET /snapshots response. Only the 1.10 fallback path
+// uses it: without it, a caller that had just fetched /snapshots made this fetch the very same
+// (potentially large — it carries every snapshot) response a second time on legacy firmware.
+// Pass it whenever you have a fresh one; omit it when the state must be read fresh (the restore
+// pre-check), where a stale read is the whole thing being guarded against.
+async function readBoardBusyState(ip, info = null) {
   try {
     const st = await getStorageStatus(ip);
     if (st && typeof st.activity === 'string') {
       return BUSY_ACTIVITIES.has(st.activity) ? st.activity : null;
     }
   } catch { /* endpoint absent (older firmware) or unreachable — fall back below */ }
-  const info = await getSnapshotInfo(ip);
-  const state = info && typeof info.state === 'string' && info.state !== 'idle' ? info.state : null;
+  const legacy = info || await getSnapshotInfo(ip);
+  const state = legacy && typeof legacy.state === 'string' && legacy.state !== 'idle' ? legacy.state : null;
   return state && BUSY_LEGACY_RE.test(state) ? state : null;
 }
 
@@ -791,6 +825,24 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   if (!next || !Array.isArray(next.cards) || !Array.isArray(next.panels)) {
     return res.status(400).json({ error: 'Config must have cards[] and panels[]' });
   }
+
+  // Optimistic concurrency. This PUT is a whole-config REPLACE, so two admin windows open at
+  // once were last-write-wins: the second Save silently reverted everything the first changed,
+  // and neither side ever saw a sign of it. Refuse a save built on a stale read instead.
+  // Checked before any normalisation so a doomed save does no work. Legacy configs carry no
+  // token (undefined -> 0 both sides), so the first save after an upgrade is accepted.
+  const existing = await loadConfig();
+  const currentVersion = Number(existing.configVersion) || 0;
+  const clientVersion = Number(next.configVersion) || 0;
+  if (currentVersion !== clientVersion) {
+    return res.status(409).json({
+      code: 'CONFIG_STALE',
+      error: 'Another admin session saved changes since this page loaded, so saving now would '
+        + 'silently revert them. Use “Export backup” if you want to keep your edits, then '
+        + 'reload the page and reapply them.',
+    });
+  }
+
   next.settings = { showUuids: true, ...(next.settings || {}) };
   if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
   if (!Array.isArray(next.panelGroups)) next.panelGroups = [];
@@ -809,7 +861,7 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   // These sub-objects are owned separately from the main config page:
   //   admin   -> auth (login), never sent to or accepted from the client
   // We ALWAYS take admin from stored config and ignore whatever the client sent.
-  const existing = await loadConfig();
+  // (`existing` was loaded above for the version check.)
   if (existing.admin) next.admin = existing.admin; else delete next.admin;
 
   // backup and shareSweep ARE edited inline on the Backups tab now (their standalone Save
@@ -860,7 +912,8 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   if (next.shareSweep) { try { await applyShareSweepConfig(); } catch (e) { console.warn('[sharesweep] apply failed:', e.message); } }
   // Tell every connected panel to reload so config changes apply immediately.
   broadcastControl({ type: 'reload' });
-  res.json({ ok: true });
+  // Hand back the new token so THIS window's next save isn't refused as stale.
+  res.json({ ok: true, configVersion: next.configVersion });
 });
 
 // Admin: probe a card's board so the operator can label heads while configuring filters.
@@ -932,7 +985,9 @@ app.put('/api/admin/sharesweep', requireAdmin, async (req, res) => {
   };
   await saveConfig(config);
   await applyShareSweepConfig(); // apply live without restart
-  res.json({ ok: true, config: config.shareSweep });
+  // configVersion: every saveConfig bumps the token, so return it or the caller's next main
+  // config save would be refused as stale.
+  res.json({ ok: true, config: config.shareSweep, configVersion: config.configVersion });
 });
 app.post('/api/admin/sharesweep/run', requireAdmin, async (_req, res) => {
   res.json(await runShareSweepNow());
@@ -964,7 +1019,9 @@ app.put('/api/admin/backup', requireAdmin, async (req, res) => {
     configRetentionDays: Math.max(1, Math.min(365, parseInt(configRetentionDays, 10) || prev.configRetentionDays || 30)),
   };
   await saveConfig(config);
-  res.json({ ok: true, config: config.backup });
+  // configVersion: "Back up now" saves through here, and every saveConfig bumps the token — so
+  // return it, or that button would leave the page unable to save anything else.
+  res.json({ ok: true, config: config.backup, configVersion: config.configVersion });
 });
 
 app.post('/api/admin/backup/run', requireAdmin, async (_req, res) => {
@@ -1181,6 +1238,18 @@ server.listen(PORT, async () => {
     }
     // Catch captures orphaned by a config hand-edit while the container was down (the save-time
     // prune can't see those).
-    await pruneSolo(assignedHeadKeys(cfg));
+    //
+    // ONLY when the config genuinely loaded. loadConfig() falls back to an EMPTY config instead
+    // of throwing, and pruning against that would read "no head is assigned anywhere" and delete
+    // every capture on the volume — irreversibly, in response to a bad-JSON config that is
+    // otherwise fully recoverable by fixing the file and restarting. That is the exact scenario
+    // the persisted capture exists for (a redeploy while a head is soloed on air), so the prune
+    // must never be the thing that destroys it.
+    if (isConfigAuthoritative()) {
+      await pruneSolo(assignedHeadKeys(cfg));
+    } else {
+      console.warn('[solo] skipping orphan prune — the config did not load, so the set of '
+        + 'assigned heads is unknown; captures are left untouched.');
+    }
   } catch {}
 });

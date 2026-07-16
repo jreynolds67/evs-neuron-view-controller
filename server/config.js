@@ -35,6 +35,14 @@ function defaultConfig() {
 
 let cache = null;
 
+// Whether the config in memory actually came from a real file (or a save), rather than the
+// EMPTY fallback loadConfig() substitutes when the file is missing or unreadable. loadConfig()
+// deliberately never throws — booting with no panels beats not booting — but that means an
+// empty config is ambiguous: it can mean "nothing is configured" OR "we couldn't read it".
+// Any caller about to DESTROY data on the basis of what's in the config must tell those apart.
+let configAuthoritative = false;
+export function isConfigAuthoritative() { return configAuthoritative; }
+
 async function ensureDir() {
   const dir = dirname(CONFIG_PATH);
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
@@ -55,6 +63,7 @@ export async function loadConfig() {
     (cache.panels || []).forEach(migratePanel);
     // Discard obsolete per-panel snapshot filters — filtering is global per head now.
     (cache.panels || []).forEach((p) => (p.heads || []).forEach((h) => { delete h.allowedSnapshots; }));
+    configAuthoritative = true;
   } catch (e) {
     // A missing file is normal on first boot. ANY other failure (malformed JSON, bad
     // permissions) means we're about to boot with an EMPTY config — every panel suddenly
@@ -67,6 +76,10 @@ export async function loadConfig() {
       console.error('[config] Starting with an EMPTY default config — all panels will be '
         + 'unregistered and admin login will be unavailable until this file is valid.');
     }
+    // ENOENT included: a missing file is normal on first boot, but it still means we do not
+    // KNOW what's configured — and on first boot there is nothing to destroy anyway, so there
+    // is no cost to treating every non-load the same way.
+    configAuthoritative = false;
     cache = defaultConfig();
   }
   return cache;
@@ -74,11 +87,19 @@ export async function loadConfig() {
 
 export async function saveConfig(next) {
   await ensureDir();
+  // Optimistic-concurrency token, owned here so EVERY write bumps it — including the targeted
+  // backup/shareSweep writes, not just the main config PUT. The admin page holds one whole
+  // config object and PUTs all of it, so without this two windows open at once are
+  // last-write-wins: the second Save silently reverts everything the first changed, with no
+  // sign to either. The config PUT compares the client's token against this and refuses a
+  // stale save. Legacy configs have no token (undefined -> 0), so the first save stamps 1.
+  next.configVersion = (Number(cache && cache.configVersion) || 0) + 1;
   const tmp = `${CONFIG_PATH}.tmp`;
   const data = JSON.stringify(next, null, 2);
   await writeFile(tmp, data, 'utf8');
   await rename(tmp, CONFIG_PATH);
   cache = next;
+  configAuthoritative = true; // a saved config is by definition the real one
   return cache;
 }
 

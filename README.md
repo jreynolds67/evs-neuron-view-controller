@@ -209,6 +209,7 @@ Top-level keys (all siblings):
 | Key | Purpose |
 | --- | --- |
 | `admin` | `{ user, passwordHash }` — admin login credential (hashed). See below. |
+| `configVersion` | **Server-managed.** Bumped on every save; used to detect two admin sessions saving over each other. Don't hand-edit it. |
 | `cards` | Array of `{ id, label, ip }` — the multiviewer cards. IPs never reach panels. |
 | `panels` | Array of panel definitions (IP, label, layout, assigned heads, grid, group, `allowShowAll`). |
 | `panelGroups` | Ordered array of group names for the admin panel list. |
@@ -223,9 +224,14 @@ it, so no config save can read or overwrite the credential.
 `backup` and `shareSweep` are **not** — they are edited inline on the Backups tab and arrive
 with the main config save, which validates and normalises them (and re-applies the sweep
 schedule immediately). The admin page is a single page with one config object and one Save,
-so its tabs can't clobber each other. But the save is a **whole-config replace with no
-version check**, so two admin sessions open at once are last-write-wins: the second Save
-silently reverts anything the first changed. Admin from one place at a time.
+so its tabs can't clobber each other.
+
+The save is a **whole-config replace**, guarded by `configVersion`: the page sends the version
+it loaded, and the server refuses the save if the stored version has moved on. So two admin
+windows open at once no longer silently last-write-win — the second Save is **rejected** with a
+clear message instead of reverting the first. To recover, use **Export backup** to keep your
+edits, reload, and reapply them. Every write bumps the version, including "Back up now" (which
+saves through its own endpoint), so those paths hand the new version back to the page.
 
 ### Per-head snapshot filters
 
