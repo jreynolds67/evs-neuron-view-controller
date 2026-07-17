@@ -32,6 +32,10 @@ const status = {
   // Label of the card the last run targeted (or the raw IP if the target wasn't a defined
   // card). Lets error reporting name the card by label instead of leaking its board IP.
   lastTargetLabel: null,
+  // Filename stamp of the run in progress (YYYY-MM-DD_HH-MM-SS) — the same key listBackups()
+  // reports as runKey. A run writes its files one at a time over several minutes, so the UI
+  // needs to know which listed run is still being written and must not be shown as complete.
+  runKey: null,
   // Set ONLY by the scheduler (not manual runs) when a scheduled backup fails to produce a
   // board archive. Drives the persistent banner on operator panels. Shape:
   //   { at: <ms>, reason: 'export' | 'empty' | 'target' | 'error', message: <string>,
@@ -105,6 +109,7 @@ export async function runBackupNow() {
     return await runBackupInternal();
   } finally {
     backupRunning = false;
+    status.runKey = null; // run is over: its files are final, whatever it managed to write
   }
 }
 
@@ -119,6 +124,7 @@ async function runBackupInternal() {
   status.lastTargetLabel = null;
   const config = await loadConfig();
   const date = fileStamp();
+  status.runKey = date; // marks this run in-progress for the UI until runBackupNow() clears it
   const written = [];
 
   // Write a dated copy of the app config FIRST, before any board contact or early exit.
@@ -476,5 +482,7 @@ function p2(d) {
 }
 
 export function backupStatus() {
-  return { ...status };
+  // `running` is derived from the live guard rather than stored, so it can never be left
+  // stuck true by a run that died between setting and clearing a flag.
+  return { ...status, running: backupRunning };
 }

@@ -6,10 +6,17 @@ const $ = (id) => document.getElementById(id);
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 const byName = (a, b) => collator.compare(a.name || '', b.name || '');
 
+// Identifies THIS window to the server for the whole session. The server broadcasts every
+// config write to the admin pages; sending this on write calls lets it skip the window that
+// caused the change, which would otherwise be told about its own save (see connectConfigWs).
+const CLIENT_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  : `c${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
 // Auth: the admin page is gated by a session cookie (set at login, sent automatically).
-// No token/header is needed. headers() remains for JSON content-type on write calls.
+// No token/header is needed. headers() remains for JSON content-type on write calls —
+// and carries the client id, so every config-writing call is covered by construction.
 function headers() {
-  return { 'Content-Type': 'application/json' };
+  return { 'Content-Type': 'application/json', 'X-Client-Id': CLIENT_ID };
 }
 // Any admin API call that comes back 401 means the session expired (30-min idle) or was
 // cleared — bounce to the login page. Wrap fetch once so every call is covered.
@@ -72,13 +79,7 @@ async function loadConfig() {
   } catch (e) { setLoadState('Error: ' + e.message); }
 }
 
-// True while our own PUT is in flight. The server broadcasts the change to every admin page
-// including this one, and that broadcast can land before our response does — without this, a
-// window would report its OWN save as someone else's change.
-let savePending = false;
-
 async function saveConfig() {
-  savePending = true;
   try {
     const res = await fetch('/api/admin/config', {
       method: 'PUT', headers: headers(), body: JSON.stringify(config),
@@ -103,7 +104,6 @@ async function saveConfig() {
     $('saveState').textContent = 'Saved ' + new Date().toLocaleTimeString();
     toast('Configuration saved', 'ok');
   } catch (e) { toast('Save failed: ' + e.message, 'err'); }
-  finally { savePending = false; }
 }
 
 // ---- Cards ----------------------------------------------------------------
@@ -1566,6 +1566,29 @@ function fmtBytes(n) {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
+// A backup writes its files one at a time (config snapshot first, then the board archive, then
+// the individual-snapshot zip) and the whole run can take minutes. While it's in progress the
+// listing is a PARTIAL view of that run, so the row is drawn with "Saving…" in the columns whose
+// file doesn't exist yet, and re-polled until the server reports the run finished. Without this,
+// a page rendered mid-run shows the run as though it were complete with files missing —
+// indistinguishable from a backup that genuinely failed to produce them.
+let bkPollTimer = null;
+function scheduleBackupFilesPoll(delayMs = 1500) {
+  clearTimeout(bkPollTimer);
+  bkPollTimer = setTimeout(refreshBackupFiles, delayMs);
+}
+
+// Refresh ONLY the file list. Deliberately not the whole form (refreshBackup): this runs on a
+// timer, and re-rendering the inputs under the admin would fight whatever they're typing.
+async function refreshBackupFiles() {
+  clearTimeout(bkPollTimer);
+  try {
+    const d = await fetch('/api/admin/backup/files', { headers: headers() }).then(r => r.json());
+    renderBackupFiles(d.files || [], d);
+    if (d.running) scheduleBackupFilesPoll(); // self-terminating: stops once the run is done
+  } catch { /* transient poll failure: leave the list as-is and stop polling */ }
+}
+
 async function refreshBackup() {
   try {
     // Settings live in the held config now; only the file list + run status come from server.
@@ -1578,8 +1601,11 @@ async function refreshBackup() {
     // Populate board dropdown from current cards.
     $('bkCard').innerHTML = '<option value="">— select —</option>' +
       config.cards.filter(x => x.id).map(x => `<option value="${esc(x.id)}"${x.id === c.cardId ? ' selected' : ''}>${esc(x.label || x.id)}</option>`).join('');
-    renderBackupFiles(data.files || []);
     const st = data.status || {};
+    renderBackupFiles(data.files || [], st);
+    // Page opened while a backup is running (the nightly one, or another admin's) — keep the
+    // list live until it finishes rather than leaving a half-written run on screen.
+    if (st.running) scheduleBackupFilesPoll();
     if (st.lastRun) $('bkState').textContent = `Last backup ${new Date(st.lastRun).toLocaleString()}` + (st.lastError ? ` · ${st.lastError}` : '');
   } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
 }
@@ -1595,7 +1621,10 @@ function wireBackupInputs() {
 }
 wireBackupInputs();
 
-function renderBackupFiles(files) {
+// `run` carries the server's live run state: { running, runKey }. Files belonging to runKey are
+// still being written, so that row's empty cells read "Saving…" rather than "—".
+function renderBackupFiles(files, run = {}) {
+  const activeKey = run && run.running ? (run.runKey || null) : null;
   const tb = $('bkFiles'); tb.innerHTML = '';
   const totalEl = $('bkTotal');
   if (totalEl) {
@@ -1604,7 +1633,7 @@ function renderBackupFiles(files) {
       ? `${files.length} file${files.length === 1 ? '' : 's'} · ${fmtBytes(total)} used on server`
       : '';
   }
-  if (!files.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">No backups yet.</td></tr>'; return; }
+  if (!files.length && !activeKey) { tb.innerHTML = '<tr><td colspan="5" class="muted">No backups yet.</td></tr>'; return; }
 
   // Group files by their RUN (date + time), so each row is one backup run with its board
   // archive, snapshot zip, and config snapshot in separate columns. Keyed on runKey, NOT the
@@ -1631,10 +1660,17 @@ function renderBackupFiles(files) {
     else row.board.push(f);
     row.mtime = Math.max(row.mtime, f.mtime);
   }
-  const rows = [...byRun.values()].sort((a, b) => b.mtime - a.mtime);
+  // A run that hasn't written its first file yet still deserves a row, so pressing "Back up now"
+  // shows something immediately instead of nothing until the config snapshot lands.
+  if (activeKey && !byRun.has(activeKey)) {
+    byRun.set(activeKey, { date: activeKey.slice(0, 10), board: [], zip: [], config: [], mtime: Date.now() });
+  }
+  const rows = [...byRun.entries()].map(([key, r]) => ({ ...r, key })).sort((a, b) => b.mtime - a.mtime);
 
-  const cell = (list) => {
-    if (!list || !list.length) return '<span class="muted">—</span>';
+  const cell = (list, saving) => {
+    if (!list || !list.length) {
+      return saving ? '<span class="bk-saving">Saving…</span>' : '<span class="muted">—</span>';
+    }
     return list.map((f) => `<div class="bk-cell">
         <span class="bk-sz muted">${fmtBytes(f.bytes)}</span>
         <a class="btn sm ghost" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download title="${esc(f.file)}">Download</a>
@@ -1644,12 +1680,16 @@ function renderBackupFiles(files) {
 
   rows.forEach((r) => {
     const tr = document.createElement('tr');
+    // Only the in-flight run's missing cells are "Saving…". A finished run that produced no zip
+    // (whole-board export failed, per-folder fallback used) must still read "—" — that's a real
+    // absence, not work in progress.
+    const saving = r.key === activeKey;
     const time = r.mtime ? new Date(r.mtime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
     tr.innerHTML = `<td class="bk-date">${esc(r.date)}</td>
       <td class="bk-time">${time}</td>
-      <td>${cell(r.board)}</td>
-      <td>${cell(r.zip)}</td>
-      <td>${cell(r.config)}</td>`;
+      <td>${cell(r.board, saving)}</td>
+      <td>${cell(r.zip, saving)}</td>
+      <td>${cell(r.config, saving)}</td>`;
     tr.querySelectorAll('button[data-file]').forEach((btn) => {
       btn.addEventListener('click', () => deleteBackup(btn.getAttribute('data-file')));
     });
@@ -1662,8 +1702,7 @@ async function deleteBackup(file) {
   try {
     const r = await fetch(`/api/admin/backup/files/${encodeURIComponent(file)}`, { method: 'DELETE', headers: headers() });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
-    const files = await fetch('/api/admin/backup/files', { headers: headers() }).then(r => r.json());
-    renderBackupFiles(files.files || []);
+    await refreshBackupFiles();
     $('bkState').textContent = `Deleted ${file}`;
   } catch (e) { $('bkState').textContent = 'Delete failed: ' + e.message; }
 }
@@ -1687,11 +1726,15 @@ $('bkRun').addEventListener('click', async () => {
     // This endpoint writes config too, so it bumps the concurrency token. Adopt it or the next
     // main "Save config" from this window would be refused as stale.
     if (saved && typeof saved.configVersion === 'number') config.configVersion = saved.configVersion;
-    const s = await fetch('/api/admin/backup/run', { method: 'POST', headers: headers() }).then(r => r.json());
+    // Start the run, then show it progressing rather than freezing the list until it ends —
+    // a whole-board export can take minutes.
+    const runReq = fetch('/api/admin/backup/run', { method: 'POST', headers: headers() });
+    scheduleBackupFilesPoll(300);
+    const s = await runReq.then(r => r.json());
     $('bkState').textContent = s.lastError ? `Error: ${s.lastError}` : `Wrote ${(s.lastFiles || []).length} file(s)`;
-    // Refresh only the file list, not the whole form, so the selection is preserved.
-    const files = await fetch('/api/admin/backup/files', { headers: headers() }).then(r => r.json());
-    renderBackupFiles(files.files || []);
+    // Final state, now that the run is over: refresh only the file list, not the whole form,
+    // so the selection is preserved.
+    await refreshBackupFiles();
   } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
 });
 
@@ -1728,11 +1771,10 @@ function showCfgBanner(msg) {
 function hideCfgBanner() { const el = $('cfgBanner'); if (el) el.classList.remove('show'); }
 
 function onConfigChangedElsewhere(version) {
-  // Already at (or ahead of) that version — this is our own save echoing back. Say nothing.
+  // Already at (or ahead of) that version — nothing new to report. (The server also excludes
+  // this window from broadcasts for its OWN writes, via the client id on the socket, so a
+  // write made here never arrives as someone else's change in the first place.)
   if (typeof version === 'number' && version <= (Number(config.configVersion) || 0)) return;
-  // One of ours is in flight. Either this broadcast is it, or another session beat us to it —
-  // and in that case our own PUT returns 409 and reports it properly. Don't double-report.
-  if (savePending) return;
 
   if (isDirty()) {
     showCfgBanner('Another admin session changed the configuration. This page is now showing an '
@@ -1751,7 +1793,10 @@ let cfgWs = null;
 function connectConfigWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   try {
-    cfgWs = new WebSocket(`${proto}://${location.host}/ws?control=1`);
+    // clientId identifies this window so the server can skip it when broadcasting a change
+    // this window itself caused (main Save, "Back up now", …). Every config write from this
+    // page sends the same id via headers().
+    cfgWs = new WebSocket(`${proto}://${location.host}/ws?control=1&clientId=${encodeURIComponent(CLIENT_ID)}`);
   } catch { setTimeout(connectConfigWs, 5000); return; }
   cfgWs.onmessage = (ev) => {
     let msg = null;

@@ -951,8 +951,9 @@ app.put('/api/admin/config', requireAdmin, async (req, res) => {
   // can reload on the spot; an admin page may hold unsaved edits, so it must decide for
   // itself (see the handler in admin.js) and must never be reloaded out from under someone.
   // Without this, the other window sits on a stale config until a manual refresh — and its
-  // next Save just fails the version check with no idea why.
-  broadcastControl({ type: 'config-changed', configVersion: next.configVersion });
+  // next Save just fails the version check with no idea why. Excludes the window that saved:
+  // it already has the new config, and telling it would report its own save as someone else's.
+  broadcastControl({ type: 'config-changed', configVersion: next.configVersion }, clientIdOf(req));
   // Hand back the new token so THIS window's next save isn't refused as stale.
   res.json({ ok: true, configVersion: next.configVersion });
 });
@@ -1029,7 +1030,7 @@ app.put('/api/admin/sharesweep', requireAdmin, async (req, res) => {
   await saveConfig(config);
   await applyShareSweepConfig(); // apply live without restart
   // Same as the backup endpoint: notify other admin pages, but don't reload operator panels.
-  broadcastControl({ type: 'config-changed', configVersion: config.configVersion });
+  broadcastControl({ type: 'config-changed', configVersion: config.configVersion }, clientIdOf(req));
   // configVersion: every saveConfig bumps the token, so return it or the caller's next main
   // config save would be refused as stale.
   res.json({ ok: true, config: config.shareSweep, configVersion: config.configVersion });
@@ -1067,7 +1068,9 @@ app.put('/api/admin/backup', requireAdmin, async (req, res) => {
   // Other admin pages need to know the token moved. Note: 'config-changed' ONLY — no 'reload'.
   // This endpoint exists precisely so "Back up now" doesn't bounce every operator panel
   // mid-show; broadcasting a reload here would reintroduce exactly that on-air side effect.
-  broadcastControl({ type: 'config-changed', configVersion: config.configVersion });
+  // Excludes the caller: "Back up now" writes through here, so without it the very window that
+  // pressed the button reported its own write as another session's change, every single time.
+  broadcastControl({ type: 'config-changed', configVersion: config.configVersion }, clientIdOf(req));
   // configVersion: "Back up now" saves through here, and every saveConfig bumps the token — so
   // return it, or that button would leave the page unable to save anything else.
   res.json({ ok: true, config: config.backup, configVersion: config.configVersion });
@@ -1078,7 +1081,11 @@ app.post('/api/admin/backup/run', requireAdmin, async (_req, res) => {
 });
 
 app.get('/api/admin/backup/files', requireAdmin, async (_req, res) => {
-  res.json({ files: await listBackups() });
+  // running/runKey ride along so the page can poll this one endpoint while a backup is in
+  // progress: it marks that run's not-yet-written files as in-flight instead of showing the
+  // half-finished run as if it were a complete one.
+  const st = backupStatus();
+  res.json({ files: await listBackups(), running: st.running, runKey: st.runKey });
 });
 
 // Download a backup file. Filename validated in backupFilePath to prevent traversal.
@@ -1235,13 +1242,24 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 // after a config save, so panels refresh without anyone touching them.
 const controlClients = new Set();
 
-function broadcastControl(msg) {
+// Identifies the admin window that CAUSED a write, so it isn't told about its own change.
+// The page mints an id at boot, sends it on every config-writing request (X-Client-Id) and
+// registers it on its control socket (?clientId=). Excluding the originator at SEND time is
+// what makes this correct: a client-side "ignore while my own save is pending" guard would
+// also swallow a DIFFERENT admin's change that landed during that window — the precise thing
+// this feature exists to surface. Panels never send an id, so they are never excluded.
+function clientIdOf(req) { return req.get('X-Client-Id') || null; }
+
+function broadcastControl(msg, exceptClientId = null) {
   const data = JSON.stringify(msg);
   let sent = 0;
+  let skipped = 0;
   for (const c of controlClients) {
+    if (exceptClientId && c.clientId === exceptClientId) { skipped++; continue; }
     if (c.readyState === WebSocket.OPEN) { try { c.send(data); sent++; } catch {} }
   }
-  console.log(`[control] broadcast ${JSON.stringify(msg)} to ${sent}/${controlClients.size} client(s)`);
+  console.log(`[control] broadcast ${JSON.stringify(msg)} to ${sent}/${controlClients.size} client(s)`
+    + (skipped ? ` (skipped ${skipped} originator)` : ''));
   return sent;
 }
 
@@ -1263,6 +1281,9 @@ wss.on('connection', (client, req) => {
   // Only the control channel is supported. Anything else (e.g. a stale ?card= client) is
   // closed rather than served — there is no board fan-out anymore.
   if (url.searchParams.get('control') !== '1') { client.close(1008, 'Unsupported channel'); return; }
+  // Admin pages identify themselves so their own writes aren't announced back to them.
+  // Panels send no id and are never excluded from a broadcast.
+  client.clientId = url.searchParams.get('clientId') || null;
   client.isAlive = true;
   client.on('pong', () => { client.isAlive = true; });
   controlClients.add(client);

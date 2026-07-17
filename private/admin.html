@@ -101,6 +101,11 @@
     .bk-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .bk-cell .bk-sz { font-size: 11px; min-width: 52px; }
     .bk-cell .btn.sm { padding: 4px 8px; }
+    /* A file the in-progress run hasn't written yet. Deliberately distinct from the "—" of a
+       finished run that produced no such file: one is pending, the other is absent. */
+    .bk-saving { font-size: 12px; color: var(--arm); }
+    @keyframes bk-pulse { 50% { opacity: 0.45; } }
+    .bk-saving { animation: bk-pulse 1.4s ease-in-out infinite; }
     .assigned-head .btn.sm { min-height: 34px; padding: 0 12px; }
     /* Per-card snapshot storage readout in the Setup card table. The bar is a FIXED width so
        every row's bar is identical — it must not flex, or rows with longer text (bigger
