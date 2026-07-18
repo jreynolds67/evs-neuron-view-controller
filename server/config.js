@@ -2,28 +2,34 @@
 // Persists admin configuration to a JSON file on a mounted Docker volume.
 // No database. Reads are cached in memory; writes are atomic (temp file + rename).
 
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { writeAtomic, makeWriteChain } from './util.js';
 
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 
-// Shape of config:
+// Shape of config (all keys are top-level siblings — see README "Configuration reference"):
 // {
-//   cards: [                       // the 12 MV cards
-//     { id: "mv1", label: "MV Card 1", ip: "10.10.60.21" }, ...
-//   ],
-//   panels: [                      // router touch panels, keyed by their fixed IP
+//   admin: { user, passwordHash },   // server-authoritative; never sent to/accepted from clients
+//   configVersion: 12,               // server-managed optimistic-concurrency token
+//   cards: [ { id: "mv1", label: "MV Card 1", ip: "10.10.60.21" }, ... ],
+//   panels: [
 //     {
-//       ip: "10.10.61.11",
+//       ip: "10.10.61.11",           // panels are keyed by their fixed source IP
 //       label: "PCR 101 Panel",
-//       layout: "1080" | "strip",  // 1920x1080 or 1835x291
-//       cardIds: ["mv1","mv2","mv3"],
-//       // Optional per-head snapshot filter. If a (cardId, headUuid) key is present,
-//       // ONLY the listed snapshot UUIDs are offered for that head. Absent = allow all.
-//       snapshotFilters: { "mv1::<headUuid>": ["<snapUuid>", ...] }
+//       layout: "1080" | "strip",    // 1920x1080 or 1835x291 (CTP)
+//       group: "Production Control", // admin-list group name ("" = ungrouped)
+//       allowShowAll: false,
+//       heads: [ { cardId, headUuid, boardName, label, order }, ... ],
+//       layoutGrid: [ { type: "head", cardId, headUuid } | { type: "blank" }, ... ] // row-major
 //     }
-//   ]
+//   ],
+//   panelGroups: [ "Production Control", ... ],  // ordered admin-list group names
+//   headFilters: { "cardId::headUuid": ["snapUuid", ...] },  // absent key = allow all
+//   settings: { showUuids: true },
+//   backup: { enabled, cardId, timeHHMM, retentionCount },
+//   shareSweep: { enabled, intervalSec, targets: [] }
 // }
 
 // Return a FRESH default config each time. A shared object literal would let a later
@@ -48,6 +54,30 @@ async function ensureDir() {
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
 }
 
+// One-time upgrade of legacy field names in a loaded config, so the rest of the codebase
+// reads ONLY the current names (no scattered fallbacks). The migrated shape is written back
+// on the next save; until then every reader goes through this cache anyway.
+//   backup.retentionDays        -> backup.retentionCount
+//   backup.configRetentionDays  -> folded into backup.retentionCount, then dropped
+//   backup.target               -> backup.cardId
+function migrateLegacyFields(cfg) {
+  const b = cfg.backup;
+  if (b && typeof b === 'object') {
+    if (b.retentionCount === undefined && b.retentionDays !== undefined) {
+      b.retentionCount = b.retentionDays;
+    }
+    // Config snapshots used to have their own age-based window; retention is now a single
+    // count shared with the board archives. Adopt the old value only if nothing else set one.
+    if (b.retentionCount === undefined && b.configRetentionDays !== undefined) {
+      b.retentionCount = b.configRetentionDays;
+    }
+    delete b.retentionDays;
+    delete b.configRetentionDays;
+    if (!b.cardId && typeof b.target === 'string' && b.target) b.cardId = b.target;
+    delete b.target;
+  }
+}
+
 export async function loadConfig() {
   if (cache) return cache;
   try {
@@ -63,6 +93,7 @@ export async function loadConfig() {
     (cache.panels || []).forEach(migratePanel);
     // Discard obsolete per-panel snapshot filters — filtering is global per head now.
     (cache.panels || []).forEach((p) => (p.heads || []).forEach((h) => { delete h.allowedSnapshots; }));
+    migrateLegacyFields(cache);
     configAuthoritative = true;
   } catch (e) {
     // A missing file is normal on first boot. ANY other failure (malformed JSON, bad
@@ -86,20 +117,15 @@ export async function loadConfig() {
 }
 
 // Serialise saves. Two concurrent saveConfig calls would otherwise interleave on the SHARED
-// temp path (each can rename the other's half-written file into place) — and, worse, defeat
-// the version check: the check reads `cache`, but a save only assigns `cache = next` after
-// its awaited write finishes, so a second save that arrives during the first one's disk I/O
-// still sees the OLD version and passes. Chaining every save through one promise makes
-// check-and-write atomic (Node is single-threaded between awaits, so an in-process chain is
-// a complete mutex here — no cross-process access to the config file exists).
-let saveChain = Promise.resolve();
+// temp path — and, worse, defeat the version check: the check reads `cache`, but a save only
+// assigns `cache = next` after its awaited write finishes, so a second save that arrives
+// during the first one's disk I/O still sees the OLD version and passes. Chaining every save
+// makes check-and-write atomic (Node is single-threaded between awaits, so an in-process
+// chain is a complete mutex here — no cross-process access to the config file exists).
+const enqueueSave = makeWriteChain();
 
 export function saveConfig(next, expectedVersion = null) {
-  const run = saveChain.then(() => doSave(next, expectedVersion));
-  // The chain must survive a failed save (rejected link would poison every later save), but
-  // each caller still sees their own failure via `run`.
-  saveChain = run.then(() => {}, () => {});
-  return run;
+  return enqueueSave(() => doSave(next, expectedVersion));
 }
 
 async function doSave(next, expectedVersion) {
@@ -116,16 +142,13 @@ async function doSave(next, expectedVersion) {
   }
   await ensureDir();
   // Optimistic-concurrency token, owned here so EVERY write bumps it — including the targeted
-  // backup/shareSweep writes, not just the main config PUT. The admin page holds one whole
-  // config object and PUTs all of it, so without this two windows open at once are
-  // last-write-wins: the second Save silently reverts everything the first changed, with no
-  // sign to either. The config PUT compares the client's token against this and refuses a
-  // stale save. Legacy configs have no token (undefined -> 0), so the first save stamps 1.
+  // backup write, not just the main config PUT. The admin page holds one whole config object
+  // and PUTs all of it, so without this two windows open at once are last-write-wins: the
+  // second Save silently reverts everything the first changed, with no sign to either. The
+  // config PUT compares the client's token against this and refuses a stale save. Legacy
+  // configs have no token (undefined -> 0), so the first save stamps 1.
   next.configVersion = (Number(cache && cache.configVersion) || 0) + 1;
-  const tmp = `${CONFIG_PATH}.tmp`;
-  const data = JSON.stringify(next, null, 2);
-  await writeFile(tmp, data, 'utf8');
-  await rename(tmp, CONFIG_PATH);
+  await writeAtomic(CONFIG_PATH, JSON.stringify(next, null, 2));
   cache = next;
   configAuthoritative = true; // a saved config is by definition the real one
   return cache;
@@ -139,7 +162,7 @@ export function getPanelByIp(config, ip) {
   return (config.panels || []).find((p) => p.ip === ip) || null;
 }
 
-// Panels now assign specific heads directly: panel.heads = [{ cardId, headUuid, label, order }].
+// Panels assign specific heads directly: panel.heads = [{ cardId, headUuid, label, order }].
 // Older configs used panel.cardIds + panel.snapshotFilters keyed by "cardId::headUuid".
 // migratePanel() upgrades the old shape on the fly so existing config files keep loading.
 //
@@ -168,4 +191,19 @@ export function resolveAllowedSnapshots(config, panelHead, cardId, headUuid) {
   const filters = config.headFilters || {};
   const list = filters[`${cardId}::${headUuid}`];
   return Array.isArray(list) && list.length ? list : null;
+}
+
+// Every "<cardId>::<headUuid>" still reachable from some panel — i.e. assigned to a panel AND
+// on a card that still exists. This is exactly the set of heads a solo capture can still be
+// restored from, so it's what prunes the solo store (see pruneSolo in solostore.js).
+export function assignedHeadKeys(config) {
+  const keys = new Set();
+  for (const p of config.panels || []) {
+    for (const h of p.heads || []) {
+      if (h && h.cardId && h.headUuid && getCardById(config, h.cardId)) {
+        keys.add(`${h.cardId}::${h.headUuid}`);
+      }
+    }
+  }
+  return keys;
 }

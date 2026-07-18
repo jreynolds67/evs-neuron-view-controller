@@ -113,8 +113,8 @@ The admin page (`/admin.html`, login-gated) has four tabs:
   a per-snapshot ZIP) and the auto-share sweep.
 - **Setup** — the card definitions (id / label / board IP) with an inline **storage
   readout** per card (used vs. the board-reported capacity — ~500 MB ceiling — amber at 75%,
-  red at 90%), plus a live
-  board-activity log.
+  red at 90%), per-card reach tests, **sync diagnostics** (the boards' native card-to-card
+  sync config/status, with a manual trigger), and a live board-activity log.
 
 ## The partials-only guarantee
 
@@ -168,8 +168,9 @@ z-order control, a minimum render size, and off-screen/zero geometry is stored b
 The **only** way to get a clean single-window fullscreen is to have a head that contains *just
 that one widget*.
 
-So "solo" works by **capture → delete → recreate**, all on the live head via `server/solostore.js`
-and the widget CRUD in `server/board.js`:
+So "solo" works by **capture → delete → recreate**, all on the live head — orchestrated by the
+solo/unsolo endpoints in `server/panelroutes.js`, with the persisted capture in
+`server/solostore.js` and the widget CRUD in `server/board.js`:
 
 1. **Capture** the head's full widget layout (every widget's complete definition) and persist it
    to the volume (`SOLO_STATE_PATH`, default `/data/solo-state.json`).
@@ -215,7 +216,7 @@ Top-level keys (all siblings):
 | `panelGroups` | Ordered array of group names for the admin panel list. |
 | `headFilters` | Map of `"cardId::headUuid"` → allowed snapshot UUIDs. Empty = all allowed. |
 | `settings` | Misc UI settings (e.g. `showUuids`). |
-| `backup` | Scheduled backup config: `{ enabled, cardId, timeHHMM, retentionCount, configRetentionDays }`. Managed on its own tab. (`retentionDays` is a legacy name still read as a fallback for `retentionCount`.) |
+| `backup` | Scheduled backup config: `{ enabled, cardId, timeHHMM, retentionCount }`. `retentionCount` keeps the N most recent backups (board archives and config snapshots each by their own most-recent dates). Managed on its own tab. (Legacy field names — `retentionDays`, `configRetentionDays`, `target` — are migrated automatically when the config loads.) |
 | `shareSweep` | Auto-share sweep config. Managed on its own tab. |
 
 `admin` is **server-authoritative**: it is never sent to the client and never accepted from
@@ -260,10 +261,12 @@ navigation, so it never sticks. Panels without the flag can't request it: the se
 ### Snapshot list behavior
 
 The board's `/v1/snapshots` returns full metadata objects (not just UUIDs, despite the
-published spec). The app normalizes these and:
+published spec). The app **relies** on that inline metadata — listings never fetch per-item
+metadata from the board — and normalizes it:
 
-- **Hides board-deleted snapshots** (`deleted: true`) by default. Append
-  `?includeDeleted=1` to the panel snapshots request to include them for troubleshooting.
+- **Hides board-deleted snapshots** (a non-null `deletedAt` on the board, normalized to
+  `deleted: true`) by default. Append `?includeDeleted=1` to the panel snapshots request to
+  include them for troubleshooting.
 - **Groups by folder** using the snapshot `path` field, matching the board's organization.
   Folders whose entries are all deleted disappear automatically.
 
@@ -325,7 +328,7 @@ Runs as a single container. Config persists on the `neuron_config` Docker volume
 1. Push this repo to your Git host.
 2. Portainer → Stacks → Add stack → *Repository*, point at the repo, compose path
    `docker-compose.yml`.
-3. Ensure the external macvlan network exists (see [Networking](#networking-macvlan)).
+3. Ensure the external macvlan network exists (see [Networking](#networking-ipvlan--macvlan)).
 4. Deploy, then set an admin credential in `config.json` and restart (see
    [Admin login](#admin-login)).
 
@@ -410,7 +413,7 @@ config/state). Check `git status` is clean of it before committing.
 
 ## Operational notes & hardware quirks
 
-- **Snapshot model shape.** `extractSnapshotHeads()` parses the blob from
+- **Snapshot model shape.** `indexSnapshotModel()` parses the blob from
   `/v1/snapshots/{uuid}/model` to find head UUIDs, and requires each head to have a real
   name to be selectable (an unnamed head is skipped — that's expected). The API spec doesn't
   formally document that blob, so if heads aren't enumerated correctly on your firmware, the
@@ -440,29 +443,37 @@ config/state). Check `git status` is clean of it before committing.
 
 ```
 server/
-  index.js      Express app, panel + admin APIs, control WebSocket, caching
-  board.js      Neuron board client; partials-only restore lives here
-  config.js     JSON-on-volume config store (cached, atomic writes)
-  auth.js       Admin login: scrypt hashing, sessions, cookies
-  cache.js      TTL cache with in-flight coalescing for hot board reads
-  backup.js     Scheduled daily backups + retention pruning
-  sharesweep.js Auto-share sweep
-  zip.js        Dependency-free ZIP writer (for the per-snapshot backup bundle)
-  logger.js     In-memory ring buffer of board API activity (admin log)
-  solostore.js  Persisted per-head fullscreen ("solo") capture (JSON on the volume)
+  index.js        App assembly: static serving, admin-page gate, route mounting, boot
+  panelroutes.js  Panel-facing API (/api/panel): flow endpoints, hot-read caches, solo
+  adminroutes.js  Admin API (/api/admin): login, config, probes, backups, diagnostics
+  control.js      Control WebSocket channel (panel reload / admin config-changed)
+  board.js        Neuron board client (firmware 1.13); partials-only restore lives here
+  config.js       JSON-on-volume config store (cached, atomic writes, legacy migration)
+  auth.js         Admin login: scrypt hashing, sessions, cookies
+  cache.js        TTL cache with in-flight coalescing for hot board reads
+  backup.js       Scheduled daily backups + retention pruning
+  sharesweep.js   Auto-share sweep
+  zip.js          Dependency-free ZIP writer (for the per-snapshot backup bundle)
+  logger.js       In-memory ring buffer of board API activity (admin log)
+  solostore.js    Persisted per-head fullscreen ("solo") capture (JSON on the volume)
+  util.js         Shared helpers: UUID check, atomic writes, write chains, task pool
 public/
-  index.html    Operator touch UI
-  app.js          ""      flow logic, live-preview polling, enlarged editor
-  admin.js      Admin page logic (panels, heads, groups, backups, storage)
-  login.html    Admin login screen
-  style.css     Shared operator styling (dark broadcast-control aesthetic)
+  index.html        Operator touch UI
+  app.js              ""      flow logic, live-preview polling, enlarged editor
+  shared.js         Utilities shared by the operator and admin pages (sorting, grouping)
+  admin-core.js     Admin page core: config load/save, dirty tracking, live sync, tabs
+  admin-panels.js   Admin: cards table + storage, panels master-detail, layout editor
+  admin-heads.js    Admin: global per-head snapshot filters
+  admin-backups.js  Admin: auto-share sweep + scheduled backup UI
+  admin-diag.js     Admin: activity log, reach tests, sync diagnostics; boots the page
+  login.html        Admin login screen
+  style.css         Shared operator styling (dark broadcast-control aesthetic)
 private/
   admin.html    Admin page shell — served only via the authenticated route, not
                 as a static file, so there's no static path to bypass the login gate
 config/
   config.example.json   Reference config shape
-api 1-10.yaml           Neuron View API spec, firmware 1.10
-api 1-13.yaml           Neuron View API spec, firmware 1.13 (what the boards run now)
+api 1-13.yaml           Neuron View API spec, firmware 1.13 (what the boards run)
 REVIEW_NOTES.md         Reviewer context for the fullscreen ("solo") feature — read before
                         judging its capture/delete/recreate design
 Dockerfile

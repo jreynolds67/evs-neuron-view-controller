@@ -1,5 +1,5 @@
 // public/app.js
-// Operator flow: Card -> live Head (target) -> Snapshot -> pick source head -> Confirm -> fire partial restore.
+// Operator flow: Head (target) -> Snapshot -> pick source head -> Confirm -> fire partial restore.
 // The panel is identified server-side by its source IP; this client never sees board IPs.
 
 const state = {
@@ -29,9 +29,8 @@ let navSeq = 0;
 function bumpNav() { return ++navSeq; }
 function navStale(token) { return token !== navSeq; }
 
-// Natural alphanumeric sort so "2 Boxes" < "9 Boxes" < "10 Boxes" (not lexical).
-const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-const byName = (a, b) => collator.compare(a.name || '', b.name || '');
+// Shared utilities (shared.js): natural alphanumeric name sort + snapshot folder grouping.
+const { byName, groupSnapshotsByFolder } = NV;
 
 function toast(msg, kind = '') {
   // When the fullscreen input editor is open it covers the page, hiding the normal toast.
@@ -233,7 +232,7 @@ async function renderHeads() {
   grid.innerHTML = '';
 
   const slots = state.panel.grid || [];
-  const cols = state.panel.cols || (state.panel.layout === 'strip' ? 8 : 7);
+  const cols = state.panel.cols; // fixed column count, computed by the server in /api/panel/me
 
   // The operator view is entirely placement-driven: heads appear only where the admin
   // placed them in the panel's layout grid. No layout → nothing to show.
@@ -343,23 +342,13 @@ async function renderSnapshots() {
       return;
     }
 
-    // Group by folder (path). Blank path = "Ungrouped", shown last.
-    const groups = new Map();
-    snapshots.forEach((s) => {
-      const key = s.path && s.path.trim() ? s.path : '\uffffUngrouped';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(s);
-    });
-    // Group keys sorted naturally; keep Ungrouped last via its sentinel prefix.
-    const orderedKeys = [...groups.keys()].sort((a, b) => collator.compare(a, b));
-
-    orderedKeys.forEach((key) => {
-      const label = key === '\uffffUngrouped' ? 'Ungrouped' : key;
+    // Group by folder (path); blank path = "Ungrouped", shown last (shared.js).
+    groupSnapshotsByFolder(snapshots).forEach(({ label, snapshots: snaps }) => {
       const header = document.createElement('div');
       header.className = 'group-head';
       header.textContent = label;
       grid.appendChild(header);
-      groups.get(key).sort(byName).forEach((s) => {
+      snaps.sort(byName).forEach((s) => {
         const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
         grid.appendChild(cardEl({
           k: s.name, v: [s.description, when].filter(Boolean).join('  ·  '),
@@ -656,6 +645,18 @@ function fsIsSoloView() {
   return !!(fsState && fsState.soloed && (fsState.widgets || []).length === 1);
 }
 
+// One round trip for everything the enlarged view needs: the head's live widgets (plus its
+// soloed flag) and the card's input groups. Shared by the initial open, the poll tick, and
+// the post-operation refresh, so the three can't drift — their differing staleness guards
+// stay at the call sites, where they are load-bearing (see REVIEW_NOTES §3).
+async function fetchFsData(head) {
+  const [preview, { groups }] = await Promise.all([
+    api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
+    api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
+  ]);
+  return { widgets: preview.widgets || [], groups: groups || [], soloed: !!preview.soloed };
+}
+
 async function openFullscreen(head) {
   stopPreviewPolling(); // the editor covers the heads grid; don't poll behind it
   const ov = $('fsOverlay');
@@ -664,11 +665,7 @@ async function openFullscreen(head) {
   $('fsBody').innerHTML = '<div class="preview-loading" style="padding:40px">Loading windows…</div>';
 
   try {
-    const [preview, { groups }] = await Promise.all([
-      api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
-      api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
-    ]);
-    fsState = { head, widgets: preview.widgets || [], groups: groups || [], soloed: !!preview.soloed };
+    fsState = { head, ...(await fetchFsData(head)) };
     renderFullscreen();
     startFullscreenPolling(); // keep the enlarged view live to recalls from other panels
   } catch (e) {
@@ -702,19 +699,15 @@ function startFullscreenPolling() {
       const token = fsSeq;
       try {
         const head = fsState.head;
-        const [preview, { groups }] = await Promise.all([
-          api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
-          api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
-        ]);
-        const widgets = preview.widgets || [];
+        const data = await fetchFsData(head);
         // Guard against races: the view may have closed/switched heads during the fetch, or a
         // solo/unsolo may have completed — in which case this response is stale and must NOT
         // repaint over the fresher render.
         if (fsState && fsState.head === head && !fsStale(token) && !fsBusy) {
           if (fsIsEditing()) {
-            updateFullscreenPreservingEdit(widgets, groups || [], !!preview.soloed);
+            updateFullscreenPreservingEdit(data.widgets, data.groups, data.soloed);
           } else {
-            fsState = { head, widgets, groups: groups || [], soloed: !!preview.soloed };
+            fsState = { head, ...data };
             renderFullscreen();
           }
         }
@@ -735,13 +728,10 @@ async function fsRefreshNow() {
   const token = fsSeq;
   try {
     const head = fsState.head;
-    const [preview, { groups }] = await Promise.all([
-      api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
-      api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
-    ]);
+    const data = await fetchFsData(head);
     // Bail if the view changed or another operation superseded this refresh mid-fetch.
     if (!fsState || fsState.head !== head || fsIsEditing() || fsStale(token)) return;
-    fsState = { head, widgets: preview.widgets || [], groups: groups || [], soloed: !!preview.soloed };
+    fsState = { head, ...data };
     renderFullscreen();
   } catch { /* leave current view on failure */ }
 }

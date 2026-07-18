@@ -1,5 +1,5 @@
 // server/board.js
-// Thin client for a single EVS Neuron View board API.
+// Thin client for a single EVS Neuron View board API (firmware 1.13 — see api 1-13.yaml).
 // Boards speak HTTPS with a self-signed certificate (default), so we use a scoped
 // HTTPS agent that accepts the board's cert WITHOUT weakening TLS for any other
 // outbound request in the process.
@@ -10,6 +10,7 @@
 
 import { Agent } from 'undici';
 import { log, describeError } from './logger.js';
+import { isUuid } from './util.js';
 
 // Default timeout for ordinary board API calls (small JSON reads/writes).
 const API_TIMEOUT_MS = 8000;
@@ -53,17 +54,10 @@ async function boardFetch(ip, path, options = {}) {
   const url = `${boardBase(ip)}${path}`;
   const started = Date.now();
   const raw = options.raw === true;
-  // quiet404: suppress the activity-log entry for a 404 specifically. Used by capability
-  // probes against endpoints that older firmware legitimately lacks (e.g. /storage/status on
-  // API 1.10) — those 404s are expected and handled by fallback, and logging each one fills
-  // the admin log with red ERR entries that look like a problem. Any OTHER failure (timeout,
-  // 500, …) on the same call is still logged: those ARE interesting.
-  const quiet404 = options.quiet404 === true;
   const opts = { ...options };
   delete opts.raw;
   delete opts.diagnostic;
   delete opts.timeoutMs;
-  delete opts.quiet404;
   try {
     const res = await fetch(url, {
       ...opts,
@@ -77,10 +71,8 @@ async function boardFetch(ip, path, options = {}) {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      if (!(quiet404 && res.status === 404)) {
-        log({ ip, path, method, url, status: res.status, durationMs, ok: false,
-          error: `HTTP ${res.status}`, detail: text.slice(0, 300) });
-      }
+      log({ ip, path, method, url, status: res.status, durationMs, ok: false,
+        error: `HTTP ${res.status}`, detail: text.slice(0, 300) });
       const err = new Error(`Board ${ip} ${path} -> ${res.status}`);
       err.status = res.status;
       err.body = text;
@@ -136,10 +128,9 @@ export async function getSelf(ip) {
 }
 
 export async function getSnapshotInfo(ip) {
-  // Log a compact summary of the board's own reported figures — the numbers we're currently
-  // seeing misbehave after the firmware update (odd storage totals, sync/state anomalies).
-  // Note: on API 1.13 `state`/`lastErrorMessage` moved OUT of this response to
-  // /v1/storage/status (see getStorageStatus); we still read storage bytes from here.
+  // Log a compact summary of the board's own reported storage figures. Board activity/sync
+  // state lives on /v1/storage/status (see getStorageStatus); this response carries the
+  // snapshot list and storage byte counts.
   return boardFetch(ip, '/snapshots', {
     diagnostic: (b) => {
       if (!b || typeof b !== 'object') return null;
@@ -147,36 +138,29 @@ export async function getSnapshotInfo(ip) {
       const total = Number(b.totalStorageBytes);
       const count = Array.isArray(b.snapshots) ? b.snapshots.length : '?';
       const mb = (n) => Number.isFinite(n) ? (n / 1048576).toFixed(1) + 'MB' : '?';
-      // state/lastErrorMessage exist on 1.10 only; include them when present.
-      const legacyState = b.state ? ` · state=${b.state}` : '';
-      const legacyErr = b.lastErrorMessage ? ` · lastError="${String(b.lastErrorMessage).slice(0, 80)}"` : '';
-      return `used=${mb(used)} · total=${mb(total)} · snapshots=${count}${legacyState}${legacyErr}`;
+      return `used=${mb(used)} · total=${mb(total)} · snapshots=${count}`;
     },
   });
 }
 
-// Board native card-to-card sync CONFIG (/v1/storage/sync — present in both 1.10 and 1.13).
-// Separate from this app's share-sweep — this is the board replicating shared snapshots to a
-// target on its own. { enabled, intervalSeconds, target }
+// Board native card-to-card sync CONFIG (/v1/storage/sync). Separate from this app's
+// share-sweep — this is the board replicating shared snapshots to a target on its own.
+// { enabled, intervalSeconds, target }
 export async function getStorageSync(ip) {
   return boardFetch(ip, '/storage/sync');
 }
 
-// Manually kick the board's native sync (POST /v1/storage/sync/trigger — present in both 1.10
-// and 1.13). Useful to force a sync and then read /storage/status to see whether/why it failed.
+// Manually kick the board's native sync (POST /v1/storage/sync/trigger). Useful to force a
+// sync and then read /storage/status to see whether/why it failed.
 export async function triggerStorageSync(ip) {
   return boardFetch(ip, '/storage/sync/trigger', { method: 'POST' });
 }
 
-// Board storage/activity status. API 1.13 moved the board's live activity + sync state here,
-// out of /v1/snapshots. Returns a normalised shape merging both firmware layouts:
-//   { activity, syncState, syncMessage, tasks }  (fields absent on a given firmware => null)
-// On older firmware that lacks /v1/storage/status this 404s; callers treat that as "unknown".
-// The 404 is an expected capability probe result (it fires on every busy-state read against a
-// 1.10 board), so it is NOT logged — anything else (timeout, 500) still is.
+// Board storage/activity status (/v1/storage/status): the board's live activity plus its
+// sync state. Returns a normalised shape:
+//   { activity, syncState, syncMessage, tasks }  (absent fields => null)
 export async function getStorageStatus(ip) {
   const s = await boardFetch(ip, '/storage/status', {
-    quiet404: true,
     diagnostic: (b) => {
       if (!b || typeof b !== 'object') return null;
       const sync = b.sync || {};
@@ -195,18 +179,13 @@ export async function getStorageStatus(ip) {
   };
 }
 
-// The documented schema says /snapshots returns an array of UUID strings, but some
-// firmware returns richer objects. Normalise any entry to { uuid, name?, description?,
-// timestamp? }. Pulls the UUID from common key names, and captures inline metadata if
-// the board already provides it (so we can skip a per-item metadata fetch).
-function looksLikeUuid(v) {
-  return typeof v === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-}
-
+// The published schema says /snapshots returns an array of UUID strings, but the firmware
+// returns rich metadata objects. Normalise either to a consistent
+// { uuid, name?, description?, timestamp?, path?, deleted, shared, readOnly } shape.
+// uuid: null marks an entry we couldn't resolve; callers drop those.
 export function normalizeSnapshotEntry(entry) {
   if (typeof entry === 'string') {
-    return { uuid: looksLikeUuid(entry) ? entry : null, inlineMeta: false };
+    return { uuid: isUuid(entry) ? entry : null };
   }
 
   if (entry && typeof entry === 'object') {
@@ -215,88 +194,51 @@ export function normalizeSnapshotEntry(entry) {
     let uuid = null;
     const candidates = [entry.uuid, entry.id, entry.snapshotUuid, entry.snapshot];
     for (const c of candidates) {
-      if (looksLikeUuid(c)) { uuid = c; break; }
-      if (c && typeof c === 'object' && looksLikeUuid(c.uuid)) { uuid = c.uuid; break; }
+      if (isUuid(c)) { uuid = c; break; }
+      if (c && typeof c === 'object' && isUuid(c.uuid)) { uuid = c.uuid; break; }
     }
     if (!uuid) {
       // Last resort: scan all string values for something uuid-shaped.
-      for (const v of Object.values(entry)) if (looksLikeUuid(v)) { uuid = v; break; }
+      for (const v of Object.values(entry)) if (isUuid(v)) { uuid = v; break; }
     }
-    const hasMeta = 'name' in entry || 'description' in entry
-      || 'timestamp' in entry || 'createdAt' in entry || 'updatedAt' in entry;
-
-    // Field renames across firmware (API 1.10 -> 1.13), handled compatibly so we work on both:
-    //   deleted (bool)        -> deletedAt (nullable timestamp; non-null = deleted)
-    //   timestamp (int)       -> createdAt / updatedAt (nullable ints)
-    // Canonical `deleted` is true if EITHER the old boolean is true OR the new deletedAt holds
-    // a real timestamp. Note 0 is treated as NOT deleted: it's the epoch, so a firmware using
-    // 0 as a "never deleted" sentinel must not be read as "deleted in 1970".
-    const deleted = entry.deleted === true
-      || (entry.deletedAt !== undefined && entry.deletedAt !== null && entry.deletedAt !== 0);
-    const timestamp = entry.timestamp
-      ?? entry.updatedAt ?? entry.createdAt ?? undefined;
 
     return {
       uuid,
-      inlineMeta: hasMeta,
       name: entry.name,
       description: entry.description,
-      timestamp,
+      timestamp: entry.updatedAt ?? entry.createdAt ?? undefined,
       path: entry.path,
-      deleted,
+      // deletedAt is a nullable timestamp; non-null = deleted. 0 is treated as NOT deleted:
+      // it's the epoch, so a firmware using 0 as a "never deleted" sentinel must not be read
+      // as "deleted in 1970".
+      deleted: entry.deletedAt !== undefined && entry.deletedAt !== null && entry.deletedAt !== 0,
       shared: entry.shared,
-      readOnly: entry.readOnly === true, // new in 1.13; false/undefined on older firmware
-      // Preserve which LEGACY (1.10-only) fields the board actually sent, so a write-back
-      // (setSnapshotShared) can include them only when talking to older firmware and omit
-      // them on 1.13 (which no longer accepts them). Absent on 1.13 => omitted downstream.
-      _legacy: {
-        deleted: 'deleted' in entry ? entry.deleted : undefined,
-        timestamp: 'timestamp' in entry ? entry.timestamp : undefined,
-        type: 'type' in entry ? entry.type : undefined,
-      },
+      readOnly: entry.readOnly === true,
     };
   }
-  return { uuid: null, inlineMeta: false };
+  return { uuid: null };
 }
 
 export async function getSnapshotMeta(ip, uuid) {
   const m = await boardFetch(ip, `/snapshots/${uuid}`);
   if (m && typeof m === 'object') {
-    // Canonical read fields (stable across API 1.10 -> 1.13), computed WITHOUT clobbering the
-    // originals, so the write path can still tell which legacy fields the board really sent:
-    //   timestamp <- timestamp | updatedAt | createdAt
-    //   deleted   <- deleted(bool) | (deletedAt != null)
-    const canonTimestamp = m.timestamp ?? m.updatedAt ?? m.createdAt ?? 0;
-    const canonDeleted = m.deleted === true
-      || (m.deletedAt !== undefined && m.deletedAt !== null && m.deletedAt !== 0);
-    m._legacy = {
-      deleted: 'deleted' in m ? m.deleted : undefined,
-      timestamp: 'timestamp' in m ? m.timestamp : undefined,
-      type: 'type' in m ? m.type : undefined,
-    };
-    m.timestamp = canonTimestamp; // canonical for readers
-    m.deleted = canonDeleted;     // canonical for readers
+    // Canonical read fields for callers: timestamp <- updatedAt | createdAt,
+    // deleted <- (deletedAt != null).
+    m.timestamp = m.updatedAt ?? m.createdAt ?? 0;
+    m.deleted = m.deletedAt !== undefined && m.deletedAt !== null && m.deletedAt !== 0;
   }
   return m;
 }
 
-// Set a snapshot's `shared` flag via a PUT to its metadata. The MetadataChange schema
-// changed across firmware:
-//   1.10 REQUIRED deleted, timestamp, type (plus the common fields)
-//   1.13 DROPPED deleted, timestamp, type (only description/name/path/shared/uuid required)
-// To work on both, we always send the fields 1.13 requires, and include the legacy fields
-// ONLY when the source snapshot actually carried them (true on 1.10, absent on 1.13). That
-// way a strict 1.13 board isn't sent fields it no longer recognises — a likely cause of the
-// post-upgrade share/sync failures — while a 1.10 board still gets its required fields.
+// Set a snapshot's `shared` flag via a PUT to its metadata (MetadataChange:
+// description/name/path/shared/uuid).
 export async function setSnapshotShared(ip, snap, shared = true) {
   // SAFETY: this is a full-object PUT — every field we send REPLACES what's on the board.
-  // The published spec says GET /snapshots returns bare UUID strings; our firmware happens to
-  // return rich objects, which is the only reason name/path are populated here. If a snapshot
-  // reaches us without inline metadata, building the body from `snap.name || ''` would rename
-  // it to an empty string and move it out of its folder. So: if the entry lacks inline
-  // metadata, fetch the real metadata first, and refuse outright rather than PUT a blank name.
+  // Building the body from `snap.name || ''` would rename a snapshot to an empty string and
+  // move it out of its folder. So: if the entry lacks a name, fetch the real metadata first,
+  // and refuse outright rather than PUT a blank name.
   let meta = snap;
-  if (snap.inlineMeta === false || snap.name === undefined || snap.name === null) {
+  if (typeof snap.name !== 'string' || snap.name === '') {
     meta = await getSnapshotMeta(ip, snap.uuid);
   }
   if (!meta || typeof meta.name !== 'string' || meta.name === '') {
@@ -317,21 +259,13 @@ export async function setSnapshotShared(ip, snap, shared = true) {
     shared,
     uuid: snap.uuid,
   };
-  // Legacy 1.10-only fields: include only if the source metadata actually carried them. A
-  // normalized entry (or a getSnapshotMeta result) records original presence in `_legacy`;
-  // fall back to the object itself for anything constructed elsewhere. On 1.13 these are all
-  // undefined, so nothing legacy is sent.
-  const legacy = meta._legacy || meta;
-  if (legacy.deleted !== undefined) change.deleted = legacy.deleted === true;
-  if (legacy.timestamp !== undefined && legacy.timestamp !== null) change.timestamp = legacy.timestamp;
-  if (legacy.type !== undefined) change.type = legacy.type;
 
   return boardFetch(ip, `/snapshots/${snap.uuid}`, {
     method: 'PUT',
     body: JSON.stringify(change),
     diagnostic: (b) => {
-      // Confirm what the board echoed back for the share flag — sharing/sync is failing
-      // after the firmware update, so seeing whether the PUT actually took is useful.
+      // Confirm what the board echoed back for the share flag, so whether the PUT actually
+      // took is visible in the activity log.
       const echoed = (b && typeof b === 'object' && 'shared' in b) ? `shared=${b.shared}` : 'no-echo';
       return `set shared=${shared} on ${snap.name || snap.uuid} · board ${echoed}`;
     },
@@ -377,13 +311,24 @@ export async function getInputGroups(ip) {
 }
 
 // One widget's full definition (needed before repointing its group).
-export async function getHeadWidget(ip, headUuid, widgetUuid) {
+async function getHeadWidget(ip, headUuid, widgetUuid) {
   return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`);
 }
 
-// Repoint a single widget to a different input group. Fetches the current widget, swaps
-// ONLY groupUuid, and PUTs it back as a WidgetChange (preserving geometry/elements/etc).
-// This is a live edit to the on-air board.
+// Reduce a widget (WidgetGet or a captured copy) to the WidgetChange body the board accepts
+// on POST/PUT, optionally overriding fields. Every widget write goes through this one shape,
+// so a firmware schema change is a single edit.
+function toWidgetChange(w, overrides = {}) {
+  return {
+    elements: w.elements || [],
+    geometry: w.geometry,
+    groupUuid: w.groupUuid || '',
+    name: w.name || '',
+    properties: w.properties || { borderColor: '', borderSize: '' },
+    ...overrides,
+  };
+}
+
 // Repoint a widget to a different input group. The board API has no conditional/versioned
 // write, so this is inherently a read-modify-write: we must send the whole widget back,
 // changing only groupUuid. The risk is a concurrent change (another operator firing a
@@ -448,13 +393,7 @@ export async function setWidgetGroup(ip, headUuid, widgetUuid, groupUuid) {
 
   const before = { groupUuid: fresh.groupUuid || '' };
   // Build the write from the freshest read, changing ONLY the group.
-  const change = {
-    elements: fresh.elements || [],
-    geometry: fresh.geometry,
-    groupUuid,
-    name: fresh.name || '',
-    properties: fresh.properties || { borderColor: '', borderSize: '' },
-  };
+  const change = toWidgetChange(fresh, { groupUuid });
   let result;
   try {
     result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
@@ -490,27 +429,17 @@ export async function deleteHeadWidget(ip, headUuid, widgetUuid) {
 // Recreate a widget on a head from a captured WidgetGet. The board assigns a NEW uuid (fine —
 // this app never persists widget UUIDs). Body is a WidgetChange (WidgetGet minus uuid).
 export async function createHeadWidget(ip, headUuid, widget) {
-  const change = {
-    elements: widget.elements || [],
-    geometry: widget.geometry,
-    groupUuid: widget.groupUuid || '',
-    name: widget.name || '',
-    properties: widget.properties || { borderColor: '', borderSize: '' },
-  };
-  return boardFetch(ip, `/heads/${headUuid}/widgets`, { method: 'POST', body: JSON.stringify(change) });
+  return boardFetch(ip, `/heads/${headUuid}/widgets`, {
+    method: 'POST', body: JSON.stringify(toWidgetChange(widget)),
+  });
 }
 
 // PUT a widget's full definition back (keeps its uuid). Used to restore the survivor to its
 // captured original (elements, geometry, border, source) when un-soloing.
 export async function setWidgetFull(ip, headUuid, widgetUuid, widget) {
-  const change = {
-    elements: widget.elements || [],
-    geometry: widget.geometry,
-    groupUuid: widget.groupUuid || '',
-    name: widget.name || '',
-    properties: widget.properties || { borderColor: '', borderSize: '' },
-  };
-  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, { method: 'PUT', body: JSON.stringify(change) });
+  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
+    method: 'PUT', body: JSON.stringify(toWidgetChange(widget)),
+  });
 }
 
 // Turn a widget into a full-canvas, VIDEO-ONLY window: geometry to full, keep only its `pip`
@@ -523,14 +452,12 @@ export async function setWidgetFullscreenVideoOnly(ip, headUuid, widgetUuid) {
   const elements = pips.length
     ? pips.map((el) => ({ ...el, geometry: { ...FULL }, visible: true }))
     : (cur.elements || []);
-  const change = {
+  const change = toWidgetChange(cur, {
     elements,
     geometry: { ...FULL },
-    groupUuid: cur.groupUuid || '',
-    name: cur.name || '',
     // Drop any border so it's pure video.
     properties: { borderColor: '', borderSize: '' },
-  };
+  });
   const result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
     method: 'PUT', body: JSON.stringify(change),
   });
@@ -599,17 +526,74 @@ export function normalizeWidgetForPreview(w) {
 
 // Raw stored model blob for a snapshot. Used to enumerate the heads that exist
 // INSIDE the snapshot so we can build the partial head map. Shape is board-specific;
-// see extractSnapshotHeads() for the tolerant parser.
-export async function getSnapshotModel(ip, uuid) {
+// see indexSnapshotModel() for the tolerant parser.
+async function getSnapshotModel(ip, uuid) {
   return boardFetch(ip, `/snapshots/${uuid}/model`);
 }
 
-// Short-lived cache of fetched snapshot models. A saved snapshot is immutable, and the
-// preview/heads calls for one snapshot all arrive within a few seconds of each other, so
-// caching briefly turns N board fetches (one per source head) into a single fetch.
-const _modelCache = new Map(); // key `${ip}::${uuid}` -> { at, model, root }
+// Walk a parsed snapshot model ONCE and index everything the app needs from it:
+//
+//   heads       — the snapshot's SELECTABLE source heads [{ uuid, name }]. An operator cannot
+//                 create an unnamed head/snapshot in the GUI, so a real, selectable head
+//                 ALWAYS has a name. That single fact is the whole discriminator: an unnamed
+//                 uuid-bearing object (widget, io block, template, nested sub-canvas) is not
+//                 selectable anyway, since the operator couldn't tell what they'd be loading.
+//   headWidgets — Map of headUuid -> normalized widgets, for EVERY head (named or not), so a
+//                 single model fetch+parse serves previews for all source heads at once.
+//
+// A head is any object under a "heads" collection carrying a uuid and a widgets array; the
+// widgets array may hold widget objects inline or string references to widgets defined
+// elsewhere in the blob.
+export function indexSnapshotModel(root) {
+  const isWidgetShape = (n) =>
+    n && typeof n === 'object' && isUuid(n.uuid) && Array.isArray(n.elements);
+
+  const headNodes = [];
+  const widgetById = new Map();
+  (function walk(node, keyHint) {
+    if (Array.isArray(node)) { for (const it of node) walk(it, keyHint); return; }
+    if (node && typeof node === 'object') {
+      if (keyHint === 'heads' && isUuid(node.uuid) && Array.isArray(node.widgets)) {
+        headNodes.push(node);
+      }
+      if (isWidgetShape(node)) widgetById.set(node.uuid, node);
+      for (const [k, v] of Object.entries(node)) walk(v, k);
+    }
+  })(root, null);
+
+  const heads = [];
+  const seen = new Set();
+  for (const h of headNodes) {
+    const named = typeof h.name === 'string' && h.name.trim() !== '' && h.name !== h.uuid;
+    if (named && !seen.has(h.uuid)) {
+      seen.add(h.uuid);
+      heads.push({ uuid: h.uuid, name: h.name });
+    }
+  }
+
+  const headWidgets = new Map();
+  for (const head of headNodes) {
+    const refs = head.widgets || [];
+    let widgets = [];
+    if (refs.length && typeof refs[0] === 'string') {
+      widgets = refs.map((id) => widgetById.get(id)).filter(Boolean);
+    } else if (refs.length && typeof refs[0] === 'object') {
+      widgets = refs.filter(isWidgetShape);
+    }
+    headWidgets.set(head.uuid, widgets.map(normalizeWidgetForPreview));
+  }
+
+  return { heads, headWidgets };
+}
+
+// Short-lived cache of fetched snapshot models WITH their parsed index. A saved snapshot is
+// immutable, and the heads/preview calls for one snapshot all arrive within a few seconds of
+// each other, so caching briefly turns N board fetches + walks (one per source head) into a
+// single fetch and a single walk. Entry: { at, root, index: { heads, headWidgets } }.
+const _modelCache = new Map(); // key `${ip}::${uuid}`
 const MODEL_TTL_MS = 30000;
 
+// model may be { data: "<json string>" } per StorageFilePreview, or already-parsed.
 function parseModelRoot(model) {
   let root = model;
   if (model && typeof model.data === 'string') {
@@ -623,100 +607,14 @@ export async function getSnapshotModelCached(ip, uuid) {
   const hit = _modelCache.get(key);
   if (hit && (Date.now() - hit.at) < MODEL_TTL_MS) return hit;
   const model = await getSnapshotModel(ip, uuid);
-  const entry = { at: Date.now(), model, root: parseModelRoot(model) };
+  const root = parseModelRoot(model);
+  const entry = { at: Date.now(), root, index: indexSnapshotModel(root) };
   _modelCache.set(key, entry);
   if (_modelCache.size > 32) {
     const now = Date.now();
     for (const [k, v] of _modelCache) if (now - v.at >= MODEL_TTL_MS) _modelCache.delete(k);
   }
   return entry;
-}
-
-// Extract named head entries from a snapshot model blob. An operator cannot create an
-// unnamed head/snapshot in the GUI, so a real, selectable head ALWAYS has a name. That
-// single fact is the whole discriminator: collect every object carrying a uuid + a
-// non-empty name, and ignore everything else. Unnamed uuid-bearing objects (widgets, io
-// blocks, templates, nested sub-canvases) are dropped — they're not selectable anyway,
-// since the operator couldn't tell what they'd be loading.
-export function extractSnapshotHeads(model) {
-  const found = [];
-  const seen = new Set();
-
-  function looksLikeUuid(v) {
-    return typeof v === 'string' &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-  }
-
-  function isRealName(name, uuid) {
-    return typeof name === 'string' && name.trim() !== '' && name !== uuid;
-  }
-
-  function walk(node, keyHint) {
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item, keyHint);
-      return;
-    }
-    if (node && typeof node === 'object') {
-      // Only treat as a head if it's under a "heads" collection, has a uuid, a widgets
-      // array (heads own widgets), and a real name. The name requirement alone excludes
-      // the phantoms; the rest keeps us from picking up named non-head objects.
-      if (keyHint === 'heads' &&
-          looksLikeUuid(node.uuid) &&
-          Array.isArray(node.widgets) &&
-          isRealName(node.name, node.uuid) &&
-          !seen.has(node.uuid)) {
-        seen.add(node.uuid);
-        found.push({ uuid: node.uuid, name: node.name });
-      }
-      for (const [k, v] of Object.entries(node)) walk(v, k);
-    }
-  }
-
-  // model may be { data: "<json string>" } per StorageFilePreview, or already-parsed.
-  let root = model;
-  if (model && typeof model.data === 'string') {
-    try { root = JSON.parse(model.data); } catch { root = model.data; }
-  }
-  walk(root, null);
-  return found;
-}
-
-// Build, in ONE pass over the model, a map of headUuid -> normalized widgets for every
-// head. This lets a single model fetch+parse serve previews for all source heads at once
-// instead of re-walking the blob per head.
-export function buildSnapshotWidgetIndex(root) {
-  function looksLikeUuid(v) {
-    return typeof v === 'string' &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-  }
-  const isWidgetShape = (n) =>
-    n && typeof n === 'object' && looksLikeUuid(n.uuid) && Array.isArray(n.elements);
-
-  const headNodes = [];
-  const widgetById = new Map();
-  (function walk(node, keyHint) {
-    if (Array.isArray(node)) { for (const it of node) walk(it, keyHint); return; }
-    if (node && typeof node === 'object') {
-      if (keyHint === 'heads' && looksLikeUuid(node.uuid) && Array.isArray(node.widgets)) {
-        headNodes.push(node);
-      }
-      if (isWidgetShape(node)) widgetById.set(node.uuid, node);
-      for (const [k, v] of Object.entries(node)) walk(v, k);
-    }
-  })(root, null);
-
-  const headWidgets = new Map();
-  for (const head of headNodes) {
-    const refs = head.widgets || [];
-    let widgets = [];
-    if (refs.length && typeof refs[0] === 'string') {
-      widgets = refs.map((id) => widgetById.get(id)).filter(Boolean);
-    } else if (refs.length && typeof refs[0] === 'object') {
-      widgets = refs.filter(isWidgetShape);
-    }
-    headWidgets.set(head.uuid, widgets.map(normalizeWidgetForPreview));
-  }
-  return { headWidgets };
 }
 
 // PARTIAL RESTORE — the only restore this app performs.

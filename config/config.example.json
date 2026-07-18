@@ -53,8 +53,7 @@
     "enabled": false,
     "cardId": "mv1",
     "timeHHMM": "03:00",
-    "retentionCount": 30,
-    "configRetentionDays": 30
+    "retentionCount": 30
   },
   "shareSweep": {
     "enabled": false,

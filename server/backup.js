@@ -4,11 +4,12 @@
 // volume, and prunes anything older than the retention window.
 //
 // Config lives in the main config file under config.backup:
-//   { enabled, cardId, timeHHMM: "03:00", retentionCount: 30, configRetentionDays: 30 }
-// (retentionDays is a legacy field name still read as a fallback for retentionCount.)
+//   { enabled, cardId, timeHHMM: "03:00", retentionCount: 30 }
+// (Legacy field names — retentionDays, configRetentionDays, target — are migrated on load by
+// config.js, so this module only ever sees the current names.)
 //
-// Retention is two independent rules — see prune(): board archives are kept by COUNT of recent
-// backup dates, config snapshots by calendar AGE.
+// Retention is a single COUNT — see prune(): board archives and config snapshots each keep
+// their own N most-recent dates, so a long board outage can't age out good board backups.
 //
 // Files are written to BACKUP_DIR (default /data/backups) as:
 //   <stamp>__<cardLabel>__all<ext>          whole-board archive (ext from the board)
@@ -16,12 +17,13 @@
 //   <stamp>__<cardLabel>__individual.zip    per-snapshot bundle
 //   <stamp>__config.json                    this app's config, minus the admin credential
 
-import { readdir, mkdir, writeFile, rename, unlink, stat } from 'node:fs/promises';
+import { readdir, mkdir, unlink, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getSnapshotInfo, normalizeSnapshotEntry, exportSnapshots } from './board.js';
 import { loadConfig, getCardById } from './config.js';
 import { buildZip } from './zip.js';
+import { writeAtomic } from './util.js';
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/data/backups';
 
@@ -143,8 +145,7 @@ async function runBackupInternal() {
   }
 
   const bcfg = config.backup || {};
-  // The UI/endpoint stores the chosen board as `cardId`. Accept legacy `target` too.
-  const sel = bcfg.cardId || bcfg.target || '';
+  const sel = bcfg.cardId || '';
   let ip = null, label = null;
   const card = getCardById(config, sel);
   if (card && card.ip) { ip = card.ip; label = card.label || card.id; }
@@ -305,12 +306,6 @@ async function runBackupInternal() {
   return status;
 }
 
-async function writeAtomic(path, buf) {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, buf);
-  await rename(tmp, path);
-}
-
 // A backup file is recognised by its date-prefix name (YYYY-MM-DD, optionally with a
 // _HH-MM-SS time), regardless of extension — the board may hand back various file types.
 const BACKUP_RE = /^\d{4}-\d{2}-\d{2}(_\d{2}-\d{2}-\d{2})?__.+/;
@@ -341,44 +336,46 @@ function classifyBackup(f) {
   return { kind, dateKey, runKey };
 }
 
-// Retention has two independent rules, by design (see the backup runner):
-//   * Board backups (full archive + its snapshot zip) are kept by COUNT: the N most recent
-//     backup DATES that produced a real board archive. Age is irrelevant, so a long board
-//     outage can't age out good backups — after recovery you still have N real ones.
-//   * Config snapshots are kept by CALENDAR AGE: the last configRetentionDays days. They're
-//     tiny and written even on board-down nights, so a simple age window suits them.
+// Retention is a single COUNT (`retentionCount`), applied to board archives and config
+// snapshots on their OWN dates:
+//   * Board backups (full archive + its snapshot zip) — the N most recent DATES that produced
+//     a real board archive. Age is irrelevant, so a long board outage can't age out good
+//     backups: after recovery you still have N real ones.
+//   * Config snapshots — the N most recent DATES that produced a config snapshot. These are
+//     tiny and written every run (even board-down nights, when no board archive is made), so
+//     they keep their OWN date set rather than being tied to the board archives' dates — a
+//     board-down night's config restore point survives as long as it's within the N most
+//     recent config dates.
+// (prune() only runs after a SUCCESSFUL board backup — see the runner — so neither set is
+// ever thinned while the board is down.)
 async function prune(config) {
-  const keepCount = (config.backup && config.backup.retentionCount)
-    || (config.backup && config.backup.retentionDays)   // legacy field name, same intent
-    || 30;
-  const configDays = (config.backup && config.backup.configRetentionDays) || 30;
+  const keep = (config.backup && config.backup.retentionCount) || 30;
 
   let files;
   try { files = await readdir(BACKUP_DIR); } catch { return; }
   const backups = files.filter(isBackupFile);
 
-  // --- Board rule: keep the N most-recent dates that have a board archive ---
+  // Collect the dates present for each kind, then keep the N most recent of each.
   const boardDates = new Set();
+  const configDates = new Set();
   for (const f of backups) {
     const { kind, dateKey } = classifyBackup(f);
-    if (kind === 'board' && dateKey) boardDates.add(dateKey);
+    if (!dateKey) continue;
+    if (kind === 'config') configDates.add(dateKey);
+    else boardDates.add(dateKey); // board or zip
   }
-  // Most recent first; keep the first keepCount dates, delete board+zip files of the rest.
-  const keptDates = new Set([...boardDates].sort().reverse().slice(0, keepCount));
-
-  // --- Config rule: keep the last configDays calendar days ---
-  const configCutoff = Date.now() - configDays * 86400000;
+  const mostRecent = (set) => new Set([...set].sort().reverse().slice(0, keep));
+  const keptBoardDates = mostRecent(boardDates);
+  const keptConfigDates = mostRecent(configDates);
 
   for (const f of backups) {
     const { kind, dateKey } = classifyBackup(f);
+    if (!dateKey) continue;
+    const kept = kind === 'config' ? keptConfigDates : keptBoardDates;
+    if (kept.has(dateKey)) continue;
     try {
-      if (kind === 'config') {
-        const s = await stat(join(BACKUP_DIR, f));
-        if (s.mtimeMs < configCutoff) { await unlink(join(BACKUP_DIR, f)); console.log(`[backup] pruned (config age) ${f}`); }
-      } else {
-        // board or zip — governed by the kept-dates set
-        if (dateKey && !keptDates.has(dateKey)) { await unlink(join(BACKUP_DIR, f)); console.log(`[backup] pruned (retention count) ${f}`); }
-      }
+      await unlink(join(BACKUP_DIR, f));
+      console.log(`[backup] pruned (retention count) ${f}`);
     } catch {}
   }
 }
@@ -414,7 +411,7 @@ export function startBackupScheduler() {
     status.nextCheck = Date.now();
     const config = await loadConfig();
     const bcfg = config.backup || {};
-    if (!bcfg.enabled || !(bcfg.cardId || bcfg.target) || !bcfg.timeHHMM) return;
+    if (!bcfg.enabled || !bcfg.cardId || !bcfg.timeHHMM) return;
     const target = hhmmToMinutes(bcfg.timeHHMM);
     if (target == null) return;
     const now = new Date();
@@ -485,4 +482,21 @@ export function backupStatus() {
   // `running` is derived from the live guard rather than stored, so it can never be left
   // stuck true by a run that died between setting and clearing a flag.
   return { ...status, running: backupRunning };
+}
+
+// Normalise a backup-config edit into the stored shape. Shared by BOTH admin save paths
+// (the main config PUT and the dedicated /api/admin/backup PUT), so the two can't drift.
+// Callers validate timeHHMM (via hhmmToMinutes) and 400 on a bad value BEFORE calling this;
+// here an empty time just falls back to the default. `prev` supplies fallbacks for fields
+// the edit omitted.
+const clampCount = (v, fallback) => Math.max(1, Math.min(365, parseInt(v, 10) || fallback || 30));
+export function normalizeBackupConfig(b, prev = {}) {
+  return {
+    enabled: !!b.enabled,
+    cardId: typeof b.cardId === 'string' ? b.cardId : '',
+    timeHHMM: b.timeHHMM || '03:00',
+    // Number of most-recent backup runs to keep — applies to board archives and config
+    // snapshots alike (each on its own dates; see prune()).
+    retentionCount: clampCount(b.retentionCount, prev.retentionCount),
+  };
 }

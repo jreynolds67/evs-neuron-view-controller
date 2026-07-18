@@ -8,9 +8,10 @@
 //
 // Kept small: written only on solo/unsolo (operator actions), never on the hot poll path.
 
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { writeAtomic, makeWriteChain } from './util.js';
 
 const SOLO_PATH = process.env.SOLO_STATE_PATH || '/data/solo-state.json';
 
@@ -40,20 +41,14 @@ export async function loadSoloStore() {
 // concurrent persist() calls against ONE shared temp path, and interleaved renames can move a
 // half-written file into place. Chaining them fixes that; each chained write snapshots the
 // then-current `store`, so the last write in the chain always lands with every mutation.
-let persistChain = Promise.resolve();
+const enqueuePersist = makeWriteChain();
 
 function persist() {
-  const run = persistChain.then(doPersist);
-  persistChain = run.then(() => {}, () => {}); // a failed write must not poison later ones
-  return run;
-}
-
-async function doPersist() {
-  const dir = dirname(SOLO_PATH);
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-  const tmp = `${SOLO_PATH}.tmp`;
-  await writeFile(tmp, JSON.stringify(store, null, 2), 'utf8');
-  await rename(tmp, SOLO_PATH);
+  return enqueuePersist(async () => {
+    const dir = dirname(SOLO_PATH);
+    if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+    await writeAtomic(SOLO_PATH, JSON.stringify(store, null, 2));
+  });
 }
 
 // Sync read — safe on the poll path because the store is fully loaded at boot.

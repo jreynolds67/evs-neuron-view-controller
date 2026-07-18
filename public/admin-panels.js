@@ -1,110 +1,6 @@
-// public/admin.js
-let config = { cards: [], panels: [] };
-const $ = (id) => document.getElementById(id);
-
-// Natural alphanumeric sort ("2 Boxes" < "9 Boxes" < "10 Boxes").
-const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-const byName = (a, b) => collator.compare(a.name || '', b.name || '');
-
-// Identifies THIS window to the server for the whole session. The server broadcasts every
-// config write to the admin pages; sending this on write calls lets it skip the window that
-// caused the change, which would otherwise be told about its own save (see connectConfigWs).
-const CLIENT_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
-  : `c${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-// Auth: the admin page is gated by a session cookie (set at login, sent automatically).
-// No token/header is needed. headers() remains for JSON content-type on write calls —
-// and carries the client id, so every config-writing call is covered by construction.
-function headers() {
-  return { 'Content-Type': 'application/json', 'X-Client-Id': CLIENT_ID };
-}
-// Any admin API call that comes back 401 means the session expired (30-min idle) or was
-// cleared — bounce to the login page. Wrap fetch once so every call is covered.
-const _rawFetch = window.fetch.bind(window);
-window.fetch = async (...args) => {
-  const res = await _rawFetch(...args);
-  try {
-    const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-    if (res.status === 401 && url.startsWith('/api/admin/') && !url.endsWith('/login')) {
-      window.location.href = '/login.html';
-    }
-  } catch {}
-  return res;
-};
-async function logout() {
-  try { await _rawFetch('/api/admin/logout', { method: 'POST' }); } catch {}
-  window.location.href = '/login.html';
-}
-function setLoadState(msg) { const el = $('loadState'); if (el) el.textContent = msg; }
-// Escape board- and user-sourced strings before putting them in innerHTML. Board strings
-// (snapshot/head names, log detail) and user labels can contain <, >, &, or quotes that
-// would otherwise break markup or render wrong (e.g. a snapshot named `A & B <x>`).
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-function toast(msg, kind = '') {
-  const t = $('toast'); t.textContent = msg; t.className = `toast show ${kind}`;
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = 'toast', 3000);
-}
-
-async function loadConfig() {
-  setLoadState('Loading…');
-  try {
-    const res = await fetch('/api/admin/config', { headers: headers() });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
-    config = await res.json();
-    config.cards ||= []; config.panels ||= [];
-    config.headFilters ||= {};
-    config.panelGroups ||= [];
-    config.settings ||= { showUuids: true };
-    config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
-    config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30, configRetentionDays: 30 };
-    // backup and shareSweep are now edited inline on the Backups tab and saved WITH the main
-    // config (their standalone Save buttons were removed), so we keep them in the held config.
-    $('showUuids').checked = config.settings.showUuids !== false;
-    renderCards(); renderPanels(); renderHeadFilterCards();
-    // If a card's head filters are open, re-render their checkboxes against the config we just
-    // loaded — otherwise they'd still show the PREVIOUS config's ticks, which a later Save would
-    // then write back. Harmless on a manual Reload; actively wrong after a silent refresh.
-    if ($('hfCard') && $('hfCard').value) renderGlobalHeadFilters($('hfCard').value);
-    // Baseline for dirty-tracking, taken AFTER the render pass: rendering normalises config in
-    // place (pads layout grids, renumbers head order), so snapshotting before it would make a
-    // freshly-loaded page look edited.
-    markClean();
-    setLoadState('Loaded');
-    if (typeof refreshBackup === 'function') refreshBackup();
-    if (typeof refreshSweep === 'function') refreshSweep();
-  } catch (e) { setLoadState('Error: ' + e.message); }
-}
-
-async function saveConfig() {
-  try {
-    const res = await fetch('/api/admin/config', {
-      method: 'PUT', headers: headers(), body: JSON.stringify(config),
-    });
-    const body = await res.json().catch(() => ({}));
-    // A stale save is refused rather than silently reverting the other session's work. Say so
-    // loudly and persistently: a toast disappears in 3s, and this one costs the admin their
-    // unsaved edits if they reload without exporting first.
-    if (res.status === 409 && body.code === 'CONFIG_STALE') {
-      $('saveState').textContent = 'NOT SAVED — another admin session changed the config.';
-      toast('Not saved — config changed elsewhere', 'err');
-      alert(body.error);
-      return;
-    }
-    if (!res.ok) throw new Error(body.error || res.status);
-    // Adopt the new token, or this window's NEXT save would be refused as stale.
-    if (typeof body.configVersion === 'number') config.configVersion = body.configVersion;
-    // What's on screen is now what's stored — this is the new dirty baseline, and any stale
-    // notice is resolved by our own save.
-    markClean();
-    hideCfgBanner();
-    $('saveState').textContent = 'Saved ' + new Date().toLocaleTimeString();
-    toast('Configuration saved', 'ok');
-  } catch (e) { toast('Save failed: ' + e.message, 'err'); }
-}
+// public/admin-panels.js
+// The Panels tab (master-detail panel editor, groups, head assignment, layout editor) and
+// the Setup tab's cards table with its storage readout. Loaded after admin-core.js.
 
 // ---- Cards ----------------------------------------------------------------
 
@@ -122,22 +18,28 @@ function renderCards() {
   });
   tb.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', (e) => {
     const { i, f } = e.target.dataset; config.cards[+i][f] = e.target.value;
+    // The board-probe caches are keyed by card id, so a changed IP leaves them pointing at
+    // the OLD board for the rest of the page's life — drop them so the next probe is fresh.
+    if (f === 'ip') {
+      cardHeadsCache.delete(config.cards[+i].id);
+      cardSnapsCache.delete(config.cards[+i].id);
+    }
     if (f === 'label' || f === 'id') renderPanels(); // panel checkboxes show labels
   }));
   tb.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', (e) => {
     config.cards.splice(+e.target.dataset.del, 1); renderCards(); renderPanels();
   }));
-  if (typeof renderReachRow === 'function') renderReachRow();
-  if (typeof renderSyncDiagCards === 'function') renderSyncDiagCards();
-  if (typeof renderHeadFilterCards === 'function') renderHeadFilterCards();
-  if (typeof loadAllStorage === 'function') loadAllStorage();
+  renderReachRow();
+  renderSyncDiagCards();
+  renderHeadFilterCards();
+  loadAllStorage();
 }
 
-// Fetch and render snapshot-storage usage for every card with an IP. Post-firmware the boards
-// report their own total (which changed), so the percentage is against the BOARD-REPORTED
-// total — shown only when the board reports one. When it doesn't, we show the used amount
-// alone (no invented denominator). Bar turns amber past 75% and red past 90%. The board's raw
-// state string is surfaced too, since the boards are misbehaving after the update.
+// Fetch and render snapshot-storage usage for every card with an IP. The boards report their
+// own total, so the percentage is against the BOARD-REPORTED total — shown only when the
+// board reports one. When it doesn't, we show the used amount alone (no invented
+// denominator). Bar turns amber past 75% and red past 90%. The board's activity/sync state
+// is surfaced too.
 async function loadAllStorage() {
   for (const c of config.cards) {
     if (!c.id) continue;
@@ -146,14 +48,14 @@ async function loadAllStorage() {
     if (!c.ip) { slot.innerHTML = '<span class="stor-idle muted">no IP</span>'; continue; }
     slot.innerHTML = '<span class="stor-idle muted">…</span>';
     try {
-      const r = await fetch(`/api/admin/cards/${encodeURIComponent(c.id)}/storage`, { headers: headers() });
+      const r = await adminFetch(`/api/admin/cards/${encodeURIComponent(c.id)}/storage`, { headers: headers() });
       const d = await r.json();
       if (!d.ok) { slot.innerHTML = `<span class="stor-err" title="${esc(d.detail || d.error || 'error')}">unreachable</span>`; continue; }
 
       const mb = (b) => (b / (1024 * 1024)).toFixed(1);
       const usedMB = d.usedBytes != null ? mb(d.usedBytes) : '?';
       // Show the board's activity/state when it's anything other than plain idle, and flag a
-      // failed sync prominently (the post-firmware failures show up here).
+      // failed sync prominently.
       const syncBad = d.syncState && /fail/i.test(d.syncState);
       const notes = [];
       if (d.state && d.state !== 'idle') notes.push(`<span class="stor-anom" title="Board activity">${esc(d.state)}</span>`);
@@ -204,7 +106,7 @@ $('showUuids').addEventListener('change', (e) => {
 
 // ---- Panels ---------------------------------------------------------------
 // Each panel assigns specific heads: p.heads = [{ cardId, headUuid, boardName, label,
-// order, allowedSnapshots }]. Cards are only the source you pick heads from.
+// order }]. Cards are only the source you pick heads from.
 
 // Cache of probed board data per card so we don't re-hit boards repeatedly.
 const cardHeadsCache = new Map();   // cardId -> [{uuid,name}]
@@ -218,7 +120,7 @@ const cardSnapsCache = new Map();   // cardId -> [{uuid,name}]
 // retry re-probes instead of being served the failure for the rest of the page's life.
 async function probeCard(cache, cardId, path) {
   if (cache.has(cardId)) return cache.get(cardId);
-  const res = await fetch(`/api/admin/cards/${encodeURIComponent(cardId)}/${path}`, { headers: headers() });
+  const res = await adminFetch(`/api/admin/cards/${encodeURIComponent(cardId)}/${path}`, { headers: headers() });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Card unreachable (HTTP ${res.status})`);
@@ -332,11 +234,11 @@ function renderPanelListInto(listCol) {
       });
     }
     // The header accepts BOTH a panel drop (move panel into this group) and a group drop
-    // (reorder groups). Which one is decided from the drag payload's `kind`.
+    // (reorder groups). Which one is decided from the drag kind (dataTransfer.getData() is
+    // only readable on `drop`, not during `dragover`, hence the module-level tracker).
     head.addEventListener('dragover', (e) => {
       e.preventDefault();
-      const kind = dragKind(e);
-      if (kind === 'group' && !isUngrouped) {
+      if (currentDragKind === 'group' && !isUngrouped) {
         const before = isBeforeMidpoint(e, head);
         head.classList.toggle('drop-before', before);
         head.classList.toggle('drop-after', !before);
@@ -348,8 +250,7 @@ function renderPanelListInto(listCol) {
     head.addEventListener('drop', (e) => {
       e.preventDefault();
       head.classList.remove('over', 'drop-before', 'drop-after');
-      const kind = dragKind(e);
-      if (kind === 'group') {
+      if (currentDragKind === 'group') {
         if (isUngrouped) return; // can't reorder relative to the pinned Ungrouped section
         const from = dragGroupName(e); if (from == null) return;
         const before = isBeforeMidpoint(e, head);
@@ -442,7 +343,6 @@ function dragGroupName(e) {
   if (!payload || payload.kind !== 'group' || typeof payload.name !== 'string') return null;
   return payload.name;
 }
-function dragKind() { return currentDragKind; }
 function isBeforeMidpoint(e, el) {
   const r = el.getBoundingClientRect();
   return (e.clientY - r.top) < r.height / 2;
@@ -719,9 +619,8 @@ function reorderHead(pi, from, target, before) {
 // The admin defines the number of ROWS and drags heads into a row-major grid. Each slot
 // is a head ref or a blank spacer. Stored as panel.layoutGrid = [ slot, ... ] row-major.
 
-function layoutCols(panel) { return panel.layout === 'strip' ? 8 : 7; }
-
 // Column count for a given layout value (the panel's `layout` field, "1080" | "strip").
+// The server computes the same mapping for the operator view in /api/panel/me.
 function colsForLayout(layout) { return layout === 'strip' ? 8 : 7; }
 
 // Re-flow the row-major layoutGrid when the column count changes, keeping every existing
@@ -751,7 +650,7 @@ function reshapeGridColumns(panel, prevLayout, nextLayout) {
 
 // Ensure the grid array exists and is sized to a whole number of rows.
 function ensureGrid(p) {
-  const cols = layoutCols(p);
+  const cols = colsForLayout(p.layout);
   if (!Array.isArray(p.layoutGrid)) p.layoutGrid = [];
   // pad to a full row
   while (p.layoutGrid.length % cols !== 0) p.layoutGrid.push({ type: 'blank' });
@@ -1114,9 +1013,9 @@ async function relinkHeadsByName() {
   for (const cardId of cardIds) {
     try {
       const heads = await probeCardHeads(cardId);
-      const byName = new Map();
-      for (const h of heads) if (h.name) byName.set(h.name, h.uuid);
-      liveByCard.set(cardId, byName);
+      const byLiveName = new Map();
+      for (const h of heads) if (h.name) byLiveName.set(h.name, h.uuid);
+      liveByCard.set(cardId, byLiveName);
     } catch { failedCards.push(cardId); }
   }
 
@@ -1125,21 +1024,21 @@ async function relinkHeadsByName() {
 
   config.panels.forEach((p, pi) => {
     (p.heads || []).forEach((h) => {
-      const byName = liveByCard.get(h.cardId);
-      if (!byName) return; // card unreachable — leave untouched
+      const byLiveName = liveByCard.get(h.cardId);
+      if (!byLiveName) return; // card unreachable — leave untouched
 
       // Already valid? (UUID still live under this name) — nothing to do.
-      const liveUuidForName = h.boardName ? byName.get(h.boardName) : null;
+      const liveUuidForName = h.boardName ? byLiveName.get(h.boardName) : null;
       if (liveUuidForName && liveUuidForName === h.headUuid) { delete h.missing; alreadyOk++; return; }
 
-      if (!h.boardName || !byName.has(h.boardName)) {
+      if (!h.boardName || !byLiveName.has(h.boardName)) {
         // No name to match on, or no live head with that name — cannot safely re-link.
         h.missing = true; unmatched++;
         unmatchedDetail.push(`${p.label || p.ip || `Panel ${pi + 1}`}: ${h.boardName || h.headUuid}`);
         return;
       }
 
-      const newUuid = byName.get(h.boardName);
+      const newUuid = byLiveName.get(h.boardName);
       const oldUuid = h.headUuid;
       if (newUuid === oldUuid) { delete h.missing; alreadyOk++; return; }
 
@@ -1179,696 +1078,3 @@ async function relinkHeadsByName() {
 
 const relinkBtn = $('relinkHeads');
 if (relinkBtn) relinkBtn.addEventListener('click', relinkHeadsByName);
-
-// ---- Global per-head snapshot filters -------------------------------------
-
-function renderHeadFilterCards() {
-  const sel = $('hfCard');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">— select a card —</option>' +
-    config.cards.filter(c => c.id).map(c => `<option value="${esc(c.id)}">${esc(c.label || c.id)}</option>`).join('');
-  if (cur) sel.value = cur;
-}
-
-$('hfCard').addEventListener('change', () => renderGlobalHeadFilters($('hfCard').value));
-
-async function renderGlobalHeadFilters(cardId) {
-  const host = $('hfHeads'); host.innerHTML = '';
-  const stateEl = $('hfState');
-  if (!cardId) { stateEl.textContent = ''; return; }
-  stateEl.textContent = 'Loading…';
-  config.headFilters ||= {};
-  try {
-    const [heads, snaps] = await Promise.all([
-      probeCardHeads(cardId),
-      probeCardSnaps(cardId),
-    ]);
-    stateEl.textContent = '';
-    const sortedHeads = heads.slice().sort(byName);
-    const sortedSnaps = snaps.slice().sort(byName);
-    if (!sortedHeads.length) { host.innerHTML = '<div class="muted">No heads on this card.</div>'; return; }
-
-    sortedHeads.forEach((h) => {
-      const key = `${cardId}::${h.uuid}`;
-      const det = document.createElement('details');
-      det.className = 'head-filter';
-      const sum = document.createElement('summary');
-      const countText = () => {
-        const arr = config.headFilters[key];
-        return arr && arr.length ? `${arr.length} allowed` : 'all allowed';
-      };
-      sum.innerHTML = `<span class="hf-name">${esc(h.name || h.uuid)}</span> <span class="hf-count muted"></span>`;
-      sum.querySelector('.hf-count').textContent = `— ${countText()}`;
-      det.appendChild(sum);
-
-      const list = document.createElement('div'); list.className = 'snaplist';
-
-      // Group snapshots by folder (path), matching the operator view: natural-sorted
-      // folder headers, blank path bucketed as "Ungrouped" and shown last.
-      const groups = new Map();
-      sortedSnaps.forEach((s) => {
-        const gkey = s.path && s.path.trim() ? s.path : '\uffffUngrouped';
-        if (!groups.has(gkey)) groups.set(gkey, []);
-        groups.get(gkey).push(s);
-      });
-      const orderedKeys = [...groups.keys()].sort((a, b) => collator.compare(a, b));
-
-      orderedKeys.forEach((gkey) => {
-        const folderLabel = gkey === '\uffffUngrouped' ? 'Ungrouped' : gkey;
-        const folderSnaps = groups.get(gkey);
-
-        const fh = document.createElement('div');
-        fh.className = 'snap-folder-head';
-        fh.innerHTML = `<label class="sfh-all"><input type="checkbox"><span></span></label>`;
-        fh.querySelector('span').textContent = folderLabel;
-        const folderCb = fh.querySelector('input');
-        list.appendChild(fh);
-
-        // Per-snapshot checkboxes, tracked so the header box can drive/reflect them.
-        const snapBoxes = [];
-        const refreshFolderBox = () => {
-          const on = snapBoxes.filter((b) => b.checked).length;
-          folderCb.checked = on === snapBoxes.length && on > 0;
-          folderCb.indeterminate = on > 0 && on < snapBoxes.length;
-        };
-
-        folderSnaps.forEach((s) => {
-          const checked = (config.headFilters[key] || []).includes(s.uuid);
-          const lab = document.createElement('label');
-          lab.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${esc(s.name)}</span>`;
-          const cb = lab.querySelector('input');
-          cb.dataset.uuid = s.uuid;
-          snapBoxes.push(cb);
-          cb.addEventListener('change', (e) => {
-            let arr = config.headFilters[key] ? [...config.headFilters[key]] : [];
-            if (e.target.checked) arr.push(s.uuid); else arr = arr.filter(u => u !== s.uuid);
-            if (arr.length) config.headFilters[key] = arr; else delete config.headFilters[key];
-            sum.querySelector('.hf-count').textContent = `— ${countText()}`;
-            refreshFolderBox();
-          });
-          list.appendChild(lab);
-        });
-
-        // Header checkbox: select/deselect every snapshot in this folder at once.
-        folderCb.addEventListener('change', (e) => {
-          const want = e.target.checked;
-          let arr = config.headFilters[key] ? [...config.headFilters[key]] : [];
-          folderSnaps.forEach((s) => {
-            const has = arr.includes(s.uuid);
-            if (want && !has) arr.push(s.uuid);
-            else if (!want && has) arr = arr.filter(u => u !== s.uuid);
-          });
-          if (arr.length) config.headFilters[key] = arr; else delete config.headFilters[key];
-          snapBoxes.forEach((b) => { b.checked = want; });
-          sum.querySelector('.hf-count').textContent = `— ${countText()}`;
-          refreshFolderBox();
-        });
-
-        refreshFolderBox();
-      });
-      det.appendChild(list);
-      host.appendChild(det);
-    });
-  } catch (e) {
-    stateEl.textContent = 'Error: ' + e.message;
-  }
-}
-
-const reloadBtn = $('reload');
-if (reloadBtn) reloadBtn.addEventListener('click', loadConfig);
-$('save').addEventListener('click', saveConfig);
-
-// ---- Export / import backup ----------------------------------------------
-
-$('exportBtn').addEventListener('click', () => {
-  // Snapshot the current editor state (includes any unsaved edits) as a backup file.
-  const data = JSON.stringify(config, null, 2);
-  const blob = new Blob([data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `neuron-mv-config-${ts}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  toast('Backup exported', 'ok');
-});
-
-$('importBtn').addEventListener('click', () => $('importFile').click());
-
-$('importFile').addEventListener('change', async (e) => {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = ''; // allow re-importing the same file later
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
-    // Validate the essential shape before accepting.
-    if (!parsed || !Array.isArray(parsed.cards) || !Array.isArray(parsed.panels)) {
-      throw new Error('File is missing cards[] or panels[]');
-    }
-    if (!confirm('Replace the current editor contents with this backup? '
-      + 'Nothing is saved to the server until you click "Save config".')) return;
-
-    // Keep the token from the config THIS page loaded — an import replaces content, not our
-    // place in the save sequence. Adopting the exported file's stale token would make the next
-    // Save fail as a phantom conflict (or, if it happened to match, defeat the check).
-    const currentVersion = config.configVersion;
-    config = parsed;
-    config.configVersion = currentVersion;
-    config.cards ||= []; config.panels ||= [];
-    config.headFilters ||= {};
-    config.panelGroups ||= [];
-    config.settings ||= { showUuids: true };
-    $('showUuids').checked = config.settings.showUuids !== false;
-    renderCards(); renderPanels(); renderHeadFilterCards();
-    $('saveState').textContent = 'Imported — review and Save config to apply';
-    toast('Backup loaded into editor. Review, then Save config.', 'ok');
-  } catch (err) {
-    toast('Import failed: ' + err.message, 'err');
-  }
-});
-
-// ---- Board API activity log ----------------------------------------------
-
-let lastLogId = 0;
-let logTimer = null;
-
-function fmtTime(ts) {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour12: false }) + '.' +
-    String(d.getMilliseconds()).padStart(3, '0');
-}
-
-async function refreshLog(reset = false) {
-  if (reset) { lastLogId = 0; $('logRows').innerHTML = ''; }
-  try {
-    const res = await fetch(`/api/admin/log?since=${lastLogId}`, { headers: headers() });
-    if (!res.ok) throw new Error(res.status);
-    const { entries } = await res.json();
-    const tb = $('logRows');
-    entries.forEach((e) => {
-      lastLogId = Math.max(lastLogId, e.id);
-      const tr = document.createElement('tr');
-      const statusTxt = e.status != null ? e.status : (e.error || 'ERR');
-      const statusColor = e.ok ? 'var(--fire)' : 'var(--danger)';
-      tr.innerHTML = `
-        <td class="mono" style="font-size:12px">${fmtTime(e.ts)}</td>
-        <td class="mono">${esc(e.method || '')}</td>
-        <td class="mono" style="font-size:12px">${esc((e.ip || '') + (e.path || ''))}</td>
-        <td class="mono" style="color:${statusColor}">${esc(statusTxt)}</td>
-        <td class="mono">${e.durationMs ?? ''}</td>
-        <td style="font-size:12px;color:var(--ink-dim)" title="${esc((e.detail || e.error || '').toString())}">${esc((e.detail || e.error || '').toString().slice(0,300))}</td>`;
-      tb.prepend(tr); // newest on top
-    });
-    // Trim DOM to 200 rows
-    while (tb.children.length > 200) tb.removeChild(tb.lastChild);
-    $('logState').textContent = `updated ${new Date().toLocaleTimeString([], {hour12:false})}`;
-  } catch (e) {
-    $('logState').textContent = 'log error: ' + e.message;
-  }
-}
-
-function startLogAuto() {
-  stopLogAuto();
-  if ($('logAuto').checked) logTimer = setInterval(refreshLog, 2000);
-}
-function stopLogAuto() { if (logTimer) { clearInterval(logTimer); logTimer = null; } }
-
-$('logRefresh').addEventListener('click', () => refreshLog());
-$('logAuto').addEventListener('change', startLogAuto);
-$('logClear').addEventListener('click', async () => {
-  await fetch('/api/admin/log', { method: 'DELETE', headers: headers() });
-  refreshLog(true);
-});
-
-// Per-card reach test buttons (rebuilt whenever cards change).
-function renderReachRow() {
-  const row = $('reachRow'); row.innerHTML = '';
-  config.cards.forEach((c) => {
-    if (!c.id) return;
-    const b = document.createElement('button');
-    b.className = 'btn sm ghost';
-    b.textContent = `Test ${c.label || c.id}`;
-    b.addEventListener('click', async () => {
-      b.textContent = `Testing ${c.label || c.id}…`;
-      try {
-        const res = await fetch(`/api/admin/cards/${encodeURIComponent(c.id)}/reach`, { headers: headers() });
-        const r = await res.json();
-        if (r.ok) toast(`${c.label}: reachable (${r.product || 'OK'} ${r.version || ''}, ${r.durationMs}ms)`, 'ok');
-        else toast(`${c.label}: ${r.error}${r.detail ? ' — ' + r.detail : ''}`, 'err');
-      } catch (e) { toast(`${c.label}: ${e.message}`, 'err'); }
-      b.textContent = `Test ${c.label || c.id}`;
-      refreshLog();
-    });
-    row.appendChild(b);
-  });
-}
-
-// ---- Sync diagnostics -----------------------------------------------------
-
-function renderSyncDiagCards() {
-  const row = $('syncDiagCards'); if (!row) return;
-  row.innerHTML = '';
-  config.cards.forEach((c) => {
-    if (!c.id) return;
-    const check = document.createElement('button');
-    check.className = 'btn sm ghost';
-    check.textContent = `Check ${c.label || c.id}`;
-    check.addEventListener('click', () => runSyncDiag(c));
-    row.appendChild(check);
-  });
-  // One button to check every card in sequence.
-  if (config.cards.some((c) => c.id)) {
-    const all = document.createElement('button');
-    all.className = 'btn sm';
-    all.textContent = 'Check all';
-    all.addEventListener('click', async () => {
-      $('syncDiagOut').innerHTML = '';
-      for (const c of config.cards) if (c.id) await runSyncDiag(c, true);
-    });
-    row.appendChild(all);
-  }
-}
-
-async function runSyncDiag(card, append = false) {
-  const out = $('syncDiagOut');
-  if (!append) out.innerHTML = '';
-  const box = document.createElement('div');
-  box.className = 'syncdiag-card';
-  box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)} — checking…</div>`;
-  out.appendChild(box);
-  try {
-    const d = await fetch(`/api/admin/cards/${encodeURIComponent(card.id)}/sync-diagnostics`, { headers: headers() }).then(r => r.json());
-    if (!d.ok) { box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div><div class="stor-err">${esc(d.error || 'error')}</div>`; return; }
-
-    const sc = d.syncConfig || {};
-    const syncBad = d.syncState && /fail/i.test(d.syncState);
-    const activityBad = d.activity && /fail/i.test(d.activity);
-    const fl = d.snapshotFlags || {};
-    const rows = [];
-    rows.push(`<tr><td>Sync enabled</td><td>${sc.enabled === true ? 'yes' : sc.enabled === false ? 'no' : '?'}${sc.target ? ' → ' + esc(String(sc.target)) : ''}${sc.intervalSeconds ? ' · every ' + esc(String(sc.intervalSeconds)) + 's' : ''}</td></tr>`);
-    rows.push(`<tr><td>Activity</td><td class="${activityBad ? 'stor-err' : ''}">${esc(d.activity || '—')}</td></tr>`);
-    rows.push(`<tr><td>Sync state</td><td class="${syncBad ? 'stor-err' : ''}">${esc(d.syncState || '—')}${d.syncMessage ? ' · ' + esc(d.syncMessage) : ''}</td></tr>`);
-    if (fl.total != null) {
-      rows.push(`<tr><td>Snapshots</td><td>${fl.total} total · ${fl.shared} shared · <b>${fl.unshared} unshared</b> · <b>${fl.readOnly} read-only</b> · ${fl.deleted} deleted</td></tr>`);
-      if (fl.readOnly > 0) rows.push(`<tr><td>Read-only</td><td class="stor-anom">${esc(fl.readOnlySample.join(', '))}${fl.readOnly > fl.readOnlySample.length ? '…' : ''}</td></tr>`);
-      if (fl.unshared > 0) rows.push(`<tr><td>Unshared</td><td class="stor-anom">${esc(fl.unsharedSample.join(', '))}${fl.unshared > fl.unsharedSample.length ? '…' : ''}</td></tr>`);
-    }
-    if (d.tasks && d.tasks.length) {
-      d.tasks.forEach((t) => rows.push(`<tr><td>Task</td><td class="${/fail/i.test(t.state || '') ? 'stor-err' : ''}">${esc(t.name || '')}: ${esc(t.state || '')}${t.message ? ' · ' + esc(t.message) : ''}</td></tr>`));
-    }
-    box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div>
-      <table class="syncdiag-table"><tbody>${rows.join('')}</tbody></table>
-      <div class="inline" style="margin-top:8px">
-        <button class="btn sm ghost syncdiag-trigger">Trigger sync on this card</button>
-        <span class="muted syncdiag-trigmsg"></span>
-      </div>`;
-    box.querySelector('.syncdiag-trigger').addEventListener('click', async (ev) => {
-      const btn = ev.target; const msg = box.querySelector('.syncdiag-trigmsg');
-      btn.disabled = true; msg.textContent = 'Triggering…';
-      try {
-        const r = await fetch(`/api/admin/cards/${encodeURIComponent(card.id)}/sync-trigger`, { method: 'POST', headers: headers() }).then(x => x.json());
-        msg.textContent = r.ok ? `activity=${r.activity || '?'} · sync=${r.syncState || '?'}${r.syncMessage ? ' · ' + r.syncMessage : ''}` : `Error: ${r.error || 'failed'}`;
-      } catch (e) { msg.textContent = 'Error: ' + e.message; }
-      btn.disabled = false;
-      refreshLog();
-    });
-    refreshLog();
-  } catch (e) {
-    box.innerHTML = `<div class="syncdiag-title">${esc(card.label || card.id)}</div><div class="stor-err">${esc(e.message)}</div>`;
-  }
-}
-
-// Auto-share is now edited inline: the Enabled toggle, interval, and card chips mutate
-// config.shareSweep directly, and the main "Save config" button persists it (its own Save
-// button was removed to avoid two confusing save buttons). "Run once now" stays as an action.
-async function refreshSweep() {
-  try {
-    // Only the live status comes from the server now; the settings live in the held config.
-    const s = await fetch('/api/admin/sharesweep', { headers: headers() }).then(r => r.json());
-    config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
-    $('swEnabled').checked = !!config.shareSweep.enabled;
-    $('swInterval').value = config.shareSweep.intervalSec || 60;
-    renderSweepCards();
-    const when = s.lastRun ? new Date(s.lastRun).toLocaleTimeString() : 'never';
-    $('sweepState').textContent = `Last run ${when}` + (s.lastError ? ` · ${s.lastError}`
-      : ` · shared ${s.shared || 0}, checked ${s.checked || 0}` + (s.failed ? `, FAILED ${s.failed}` : ''));
-  } catch (e) { $('sweepState').textContent = 'Error: ' + e.message; }
-}
-
-// Per-card enable chips. Empty targets means "all cards" — represented here by every
-// chip being on; toggling any off makes the set explicit.
-function renderSweepCards() {
-  const host = $('swCards'); host.innerHTML = '';
-  const sw = (config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] });
-  const allSelected = (sw.targets || []).length === 0;
-  config.cards.filter(c => c.id).forEach((c) => {
-    const on = allSelected || sw.targets.includes(c.id);
-    const chip = document.createElement('button');
-    chip.className = 'chip' + (on ? ' on' : '');
-    chip.textContent = c.label || c.id;
-    chip.addEventListener('click', () => {
-      // Materialize "all" into an explicit list on first toggle.
-      let list = (sw.targets || []).length ? [...sw.targets]
-        : config.cards.filter(x => x.id).map(x => x.id);
-      if (list.includes(c.id)) list = list.filter(x => x !== c.id); else list.push(c.id);
-      sw.targets = list;
-      renderSweepCards();
-    });
-    host.appendChild(chip);
-  });
-}
-
-// Enabled / interval edits update the held config immediately (persisted on main Save).
-$('swEnabled').addEventListener('change', (e) => {
-  (config.shareSweep ||= {}).enabled = e.target.checked;
-});
-$('swInterval').addEventListener('input', (e) => {
-  (config.shareSweep ||= {}).intervalSec = parseInt(e.target.value, 10) || 60;
-});
-
-$('swRun').addEventListener('click', async () => {
-  $('sweepState').textContent = 'Running…';
-  try {
-    const s = await fetch('/api/admin/sharesweep/run', { method: 'POST', headers: headers() }).then(r => r.json());
-    $('sweepState').textContent = `Shared ${s.shared || 0}, checked ${s.checked || 0}` + (s.failed ? `, FAILED ${s.failed}` : '');
-  } catch (e) { $('sweepState').textContent = 'Error: ' + e.message; }
-});
-
-// ---- Backup ---------------------------------------------------------------
-
-function fmtBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1048576).toFixed(1)} MB`;
-}
-
-// A backup writes its files one at a time (config snapshot first, then the board archive, then
-// the individual-snapshot zip) and the whole run can take minutes. While it's in progress the
-// listing is a PARTIAL view of that run, so the row is drawn with "Saving…" in the columns whose
-// file doesn't exist yet, and re-polled until the server reports the run finished. Without this,
-// a page rendered mid-run shows the run as though it were complete with files missing —
-// indistinguishable from a backup that genuinely failed to produce them.
-let bkPollTimer = null;
-function scheduleBackupFilesPoll(delayMs = 1500) {
-  clearTimeout(bkPollTimer);
-  bkPollTimer = setTimeout(refreshBackupFiles, delayMs);
-}
-
-// Refresh ONLY the file list. Deliberately not the whole form (refreshBackup): this runs on a
-// timer, and re-rendering the inputs under the admin would fight whatever they're typing.
-async function refreshBackupFiles() {
-  clearTimeout(bkPollTimer);
-  try {
-    const d = await fetch('/api/admin/backup/files', { headers: headers() }).then(r => r.json());
-    renderBackupFiles(d.files || [], d);
-    if (d.running) scheduleBackupFilesPoll(); // self-terminating: stops once the run is done
-  } catch { /* transient poll failure: leave the list as-is and stop polling */ }
-}
-
-async function refreshBackup() {
-  try {
-    // Settings live in the held config now; only the file list + run status come from server.
-    const data = await fetch('/api/admin/backup', { headers: headers() }).then(r => r.json());
-    const c = (config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30, configRetentionDays: 30 });
-    $('bkEnabled').checked = !!c.enabled;
-    $('bkTime').value = c.timeHHMM || '03:00';
-    $('bkRetention').value = c.retentionCount || c.retentionDays || 30;
-    $('bkConfigDays').value = c.configRetentionDays || 30;
-    // Populate board dropdown from current cards.
-    $('bkCard').innerHTML = '<option value="">— select —</option>' +
-      config.cards.filter(x => x.id).map(x => `<option value="${esc(x.id)}"${x.id === c.cardId ? ' selected' : ''}>${esc(x.label || x.id)}</option>`).join('');
-    const st = data.status || {};
-    renderBackupFiles(data.files || [], st);
-    // Page opened while a backup is running (the nightly one, or another admin's) — keep the
-    // list live until it finishes rather than leaving a half-written run on screen.
-    if (st.running) scheduleBackupFilesPoll();
-    if (st.lastRun) $('bkState').textContent = `Last backup ${new Date(st.lastRun).toLocaleString()}` + (st.lastError ? ` · ${st.lastError}` : '');
-  } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
-}
-
-// Backup form edits update the held config immediately (persisted on the main Save config).
-function wireBackupInputs() {
-  const c = () => (config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30, configRetentionDays: 30 });
-  $('bkEnabled').addEventListener('change', (e) => { c().enabled = e.target.checked; });
-  $('bkCard').addEventListener('change', (e) => { c().cardId = e.target.value; });
-  $('bkTime').addEventListener('input', (e) => { c().timeHHMM = e.target.value.trim(); });
-  $('bkRetention').addEventListener('input', (e) => { c().retentionCount = parseInt(e.target.value, 10) || 30; });
-  $('bkConfigDays').addEventListener('input', (e) => { c().configRetentionDays = parseInt(e.target.value, 10) || 30; });
-}
-wireBackupInputs();
-
-// `run` carries the server's live run state: { running, runKey }. Files belonging to runKey are
-// still being written, so that row's empty cells read "Saving…" rather than "—".
-function renderBackupFiles(files, run = {}) {
-  const activeKey = run && run.running ? (run.runKey || null) : null;
-  const tb = $('bkFiles'); tb.innerHTML = '';
-  const totalEl = $('bkTotal');
-  if (totalEl) {
-    const total = files.reduce((sum, f) => sum + (f.bytes || 0), 0);
-    totalEl.textContent = files.length
-      ? `${files.length} file${files.length === 1 ? '' : 's'} · ${fmtBytes(total)} used on server`
-      : '';
-  }
-  if (!files.length && !activeKey) { tb.innerHTML = '<tr><td colspan="5" class="muted">No backups yet.</td></tr>'; return; }
-
-  // Group files by their RUN (date + time), so each row is one backup run with its board
-  // archive, snapshot zip, and config snapshot in separate columns. Keyed on runKey, NOT the
-  // date: several runs in a day are distinct files, and grouping them by date merged them into
-  // one row whose buttons could only address a single file per kind — the newest silently had
-  // no Delete button. (Retention still groups by date; that's a separate key. See backup.js.)
-  //
-  // Each cell holds a LIST, not one file: a run whose whole-board export failed falls back to
-  // one board file PER FOLDER, so several files of the same kind can share a run. Every file on
-  // disk must get its own Download/Delete, or it becomes undeletable through the UI.
-  const byRun = new Map();
-  for (const f of files) {
-    const stamp = (f.file.match(/^(\d{4}-\d{2}-\d{2}(?:_\d{2}-\d{2}-\d{2})?)/) || [])[1];
-    const key = f.runKey || stamp || f.file;
-    if (!byRun.has(key)) {
-      byRun.set(key, {
-        date: f.dateKey || (stamp || '').slice(0, 10) || key,
-        board: [], zip: [], config: [], mtime: f.mtime,
-      });
-    }
-    const row = byRun.get(key);
-    if (f.kind === 'zip') row.zip.push(f);
-    else if (f.kind === 'config') row.config.push(f);
-    else row.board.push(f);
-    row.mtime = Math.max(row.mtime, f.mtime);
-  }
-  // A run that hasn't written its first file yet still deserves a row, so pressing "Back up now"
-  // shows something immediately instead of nothing until the config snapshot lands.
-  if (activeKey && !byRun.has(activeKey)) {
-    byRun.set(activeKey, { date: activeKey.slice(0, 10), board: [], zip: [], config: [], mtime: Date.now() });
-  }
-  const rows = [...byRun.entries()].map(([key, r]) => ({ ...r, key })).sort((a, b) => b.mtime - a.mtime);
-
-  const cell = (list, saving) => {
-    if (!list || !list.length) {
-      return saving ? '<span class="bk-saving">Saving…</span>' : '<span class="muted">—</span>';
-    }
-    return list.map((f) => `<div class="bk-cell">
-        <span class="bk-sz muted">${fmtBytes(f.bytes)}</span>
-        <a class="btn sm ghost" href="/api/admin/backup/download/${encodeURIComponent(f.file)}" download title="${esc(f.file)}">Download</a>
-        <button class="btn sm del" data-file="${esc(f.file)}">Delete</button>
-      </div>`).join('');
-  };
-
-  rows.forEach((r) => {
-    const tr = document.createElement('tr');
-    // Only the in-flight run's missing cells are "Saving…". A finished run that produced no zip
-    // (whole-board export failed, per-folder fallback used) must still read "—" — that's a real
-    // absence, not work in progress.
-    const saving = r.key === activeKey;
-    const time = r.mtime ? new Date(r.mtime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-    tr.innerHTML = `<td class="bk-date">${esc(r.date)}</td>
-      <td class="bk-time">${time}</td>
-      <td>${cell(r.board, saving)}</td>
-      <td>${cell(r.zip, saving)}</td>
-      <td>${cell(r.config, saving)}</td>`;
-    tr.querySelectorAll('button[data-file]').forEach((btn) => {
-      btn.addEventListener('click', () => deleteBackup(btn.getAttribute('data-file')));
-    });
-    tb.appendChild(tr);
-  });
-}
-
-async function deleteBackup(file) {
-  if (!confirm(`Delete backup "${file}"? This cannot be undone.`)) return;
-  try {
-    const r = await fetch(`/api/admin/backup/files/${encodeURIComponent(file)}`, { method: 'DELETE', headers: headers() });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
-    await refreshBackupFiles();
-    $('bkState').textContent = `Deleted ${file}`;
-  } catch (e) { $('bkState').textContent = 'Delete failed: ' + e.message; }
-}
-
-$('bkRun').addEventListener('click', async () => {
-  if (!config.backup || !config.backup.cardId) { $('bkState').textContent = 'Pick a board first.'; return; }
-  $('bkState').textContent = 'Saving & backing up… (may take a moment)';
-  try {
-    // Persist ONLY the backup settings, through their own endpoint, so the run uses exactly
-    // what's on screen. Deliberately NOT the main config save: that PUT commits every other
-    // unsaved edit on the page and broadcasts a reload to EVERY operator panel — an on-air
-    // side effect a maintenance action must never have.
-    const r = await fetch('/api/admin/backup', {
-      method: 'PUT', headers: headers(), body: JSON.stringify(config.backup),
-    });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
-    // Adopt the server's normalised values (retention clamping, time default) so a later main
-    // Save doesn't push the un-normalised screen values back over them.
-    const saved = await r.json();
-    if (saved && saved.config) config.backup = saved.config;
-    // This endpoint writes config too, so it bumps the concurrency token. Adopt it or the next
-    // main "Save config" from this window would be refused as stale.
-    if (saved && typeof saved.configVersion === 'number') config.configVersion = saved.configVersion;
-    // Start the run, then show it progressing rather than freezing the list until it ends —
-    // a whole-board export can take minutes.
-    const runReq = fetch('/api/admin/backup/run', { method: 'POST', headers: headers() });
-    scheduleBackupFilesPoll(300);
-    const s = await runReq.then(r => r.json());
-    $('bkState').textContent = s.lastError ? `Error: ${s.lastError}` : `Wrote ${(s.lastFiles || []).length} file(s)`;
-    // Final state, now that the run is over: refresh only the file list, not the whole form,
-    // so the selection is preserved.
-    await refreshBackupFiles();
-  } catch (e) { $('bkState').textContent = 'Error: ' + e.message; }
-});
-
-// ---- Live config sync between admin windows -------------------------------
-// The server broadcasts { type:'config-changed', configVersion } on every config write, so a
-// second admin window doesn't sit on a stale copy until someone happens to refresh it — and
-// then only discovers it when its Save is refused.
-//
-// This shares the operator panels' control socket but reacts to a DIFFERENT message. Panels
-// reload on 'reload'; this page must NEVER do that unprompted, because it can hold unsaved
-// edits that a reload would silently throw away. Hence: refresh only when there's nothing to
-// lose, otherwise say so and let the admin decide.
-
-// Serialized config as of the last load/save. Anything edited since makes the live object
-// differ. This ONLY gates whether an outside change can be adopted silently, and it errs
-// toward "dirty" on purpose: a wrong "dirty" costs a banner, a wrong "clean" destroys someone's
-// unsaved work. It has to err that way — the render pass normalises config in place (padding
-// layout grids, renumbering head order), which is indistinguishable from a real edit.
-let cleanSnapshot = null;
-function markClean() {
-  try { cleanSnapshot = JSON.stringify(config); } catch { cleanSnapshot = null; }
-}
-function isDirty() {
-  if (cleanSnapshot === null) return true;
-  try { return JSON.stringify(config) !== cleanSnapshot; } catch { return true; }
-}
-
-function showCfgBanner(msg) {
-  const el = $('cfgBanner');
-  if (!el) return;
-  $('cfgBannerMsg').textContent = msg;
-  el.classList.add('show');
-}
-function hideCfgBanner() { const el = $('cfgBanner'); if (el) el.classList.remove('show'); }
-
-function onConfigChangedElsewhere(version) {
-  // Already at (or ahead of) that version — nothing new to report. (The server also excludes
-  // this window from broadcasts for its OWN writes, via the client id on the socket, so a
-  // write made here never arrives as someone else's change in the first place.)
-  if (typeof version === 'number' && version <= (Number(config.configVersion) || 0)) return;
-
-  if (isDirty()) {
-    showCfgBanner('Another admin session changed the configuration. This page is now showing an '
-      + 'older version, and saving from here will be refused. Reload to pick up the current '
-      + 'config — unsaved edits on this page will be lost, so use “Export backup” first if you '
-      + 'need to keep them.');
-    return;
-  }
-  // Nothing unsaved to protect — just adopt the new config in place.
-  hideCfgBanner();
-  loadConfig();
-  toast('Configuration updated by another admin session');
-}
-
-let cfgWs = null;
-function connectConfigWs() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  try {
-    // clientId identifies this window so the server can skip it when broadcasting a change
-    // this window itself caused (main Save, "Back up now", …). Every config write from this
-    // page sends the same id via headers().
-    cfgWs = new WebSocket(`${proto}://${location.host}/ws?control=1&clientId=${encodeURIComponent(CLIENT_ID)}`);
-  } catch { setTimeout(connectConfigWs, 5000); return; }
-  cfgWs.onmessage = (ev) => {
-    let msg = null;
-    try { msg = JSON.parse(ev.data); } catch { return; }
-    // 'reload' is deliberately ignored here — it's the operator panels' message.
-    if (msg && msg.type === 'config-changed') onConfigChangedElsewhere(msg.configVersion);
-  };
-  // Reconnect so this survives a redeploy; without it the window goes quietly stale again.
-  cfgWs.onclose = () => setTimeout(connectConfigWs, 5000);
-  cfgWs.onerror = () => { try { cfgWs.close(); } catch {} };
-}
-
-const cfgReloadBtn = $('cfgBannerReload');
-if (cfgReloadBtn) cfgReloadBtn.addEventListener('click', () => {
-  if (isDirty() && !confirm('Reload the configuration and discard your unsaved changes on this page?')) return;
-  hideCfgBanner();
-  loadConfig();
-});
-const cfgBannerX = $('cfgBannerX');
-if (cfgBannerX) cfgBannerX.addEventListener('click', hideCfgBanner);
-
-const logoutBtn = $('logoutBtn');
-if (logoutBtn) logoutBtn.addEventListener('click', logout);
-
-// Verify the session up front. If it's already expired, the fetch wrapper redirects to
-// login; otherwise loadConfig() proceeds. (The page load itself is also server-gated.)
-fetch('/api/admin/session').then((r) => { if (r.ok) loadConfig(); });
-refreshLog(true);
-startLogAuto();
-connectConfigWs(); // keep this window in step with any other admin session
-
-// Sub-navigation: switch between admin tab panels. Purely a display grouping — all
-// sections stay in the DOM (so their render/refresh logic is unaffected), we just show
-// one panel at a time.
-document.querySelectorAll('.subnav-tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    const target = tab.dataset.tab;
-    document.querySelectorAll('.subnav-tab').forEach((t) => t.classList.toggle('active', t === tab));
-    document.querySelectorAll('.tabpanel').forEach((p) => {
-      p.classList.toggle('active', p.dataset.tabpanel === target);
-    });
-  });
-});
-
-// Container clock in the admin header. Renders the container's wall-clock time in the
-// container's own timezone (from /api/time), so it's accurate even if the browser is in a
-// different zone. No tz label — just the time.
-let clockOffsetMs = 0, clockTz = null, clockFmt = null;
-async function syncClock() {
-  try {
-    const t = await fetch('/api/time').then((r) => r.json());
-    clockOffsetMs = t.epochMs - Date.now();
-    if (t.tz && t.tz !== clockTz) {
-      clockTz = t.tz;
-      try {
-        clockFmt = new Intl.DateTimeFormat(undefined, {
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: false, timeZone: clockTz,
-        });
-      } catch { clockFmt = null; } // invalid tz — fall back to local render
-    }
-  } catch {}
-}
-function tickClock() {
-  const el = document.getElementById('adminClock');
-  if (!el) return;
-  const d = new Date(Date.now() + clockOffsetMs);
-  if (clockFmt) { el.textContent = clockFmt.format(d); return; }
-  const p = (n) => String(n).padStart(2, '0');
-  el.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-tickClock();
-setInterval(tickClock, 1000);
-syncClock().then(tickClock);
-setInterval(syncClock, 5 * 60 * 1000);

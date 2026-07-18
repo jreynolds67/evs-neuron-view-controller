@@ -78,7 +78,7 @@ setInterval(() => {
 
 // --- cookie helpers --------------------------------------------------------
 
-export function parseCookies(req) {
+function parseCookies(req) {
   const raw = req.headers.cookie || '';
   const out = {};
   raw.split(';').forEach((pair) => {
@@ -111,8 +111,6 @@ export function clearSessionCookie(res) {
   res.setHeader('Set-Cookie',
     `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
 }
-
-export { SESSION_COOKIE, IDLE_MS };
 
 // Convenience for generating a hash from the CLI:
 //   node server/auth.js 'mypassword'

@@ -38,7 +38,7 @@ widget UUIDs (heads are bound by UUID; widgets are not). If that ever changes, s
 
 ## 2. What to scrutinize
 
-### `runPool` is best-effort, and that used to hide a real bug (`server/index.js:598`)
+### `runPool` is best-effort, and that used to hide a real bug (`server/util.js`; solo handlers in `server/panelroutes.js`)
 
 `runPool` does not abort the run when one widget's write fails — one hiccuping widget
 shouldn't stop a whole solo/restore. That part is deliberate and unchanged. But until
@@ -66,7 +66,7 @@ would match none of them against the capture and duplicate the mosaic. Partial r
 dead end by design; the operator is told to recall a snapshot. Don't "fix" this by making
 un-solo retryable without solving the UUID problem first.
 
-### The capture is persisted *before* the deletes (`server/index.js:638`)
+### The capture is persisted *before* the deletes (solo handler in `server/panelroutes.js`)
 
 Deliberate, for crash safety: if the process dies mid-solo, the layout is recoverable. The
 cost is a **transient state where the store says `soloed: true` but the head still holds
@@ -150,8 +150,9 @@ oversights:
 - **Backups held in memory** during export — fine at the ~500 MB card storage ceiling.
 - **Solo/un-solo has no per-head lock.** There is no mutex anywhere in the solo path, so
   concurrent operations on the *same head* can race. The realistic one: un-solo reads the
-  capture at `index.js:664` and doesn't clear it until after every recreate finishes
-  (`index.js:688`) — seconds on a big mosaic. A second panel entering un-solo in that window
+  capture at the top of the unsolo handler (`server/panelroutes.js`) and doesn't clear it
+  until after every recreate finishes — seconds on a big mosaic. A second panel entering
+  un-solo in that window
   gets the same capture, passes the same staleness guard, and recreates the whole mosaic
   again. **Declined:** the owner has tested multi-user conflicts without observing problems,
   and judges two operators hold-to-restoring the same head within the same restore to be
