@@ -128,6 +128,22 @@ export function saveConfig(next, expectedVersion = null) {
   return enqueueSave(() => doSave(next, expectedVersion));
 }
 
+// Targeted read-modify-write on the LIVE config, run INSIDE the same write lock as saveConfig.
+// `mutate(cfg)` receives a clone of the current config and changes it in place; the version
+// bump and atomic write happen here afterward. This is the correct primitive for a partial
+// update (e.g. the backup PUT): capturing the config in the request handler and passing the
+// whole thing to saveConfig races a concurrent full-config PUT — if that PUT's write lands
+// first, the partial save (built from a now-stale snapshot) silently reverts it. Reading the
+// freshest cache here, inside the lock, closes that window; cloning keeps a failed write from
+// leaving the in-memory cache diverged from disk.
+export function updateConfig(mutate) {
+  return enqueueSave(async () => {
+    const next = structuredClone(cache || defaultConfig());
+    await mutate(next);
+    return doSave(next, null);
+  });
+}
+
 async function doSave(next, expectedVersion) {
   // Optimistic concurrency, verified INSIDE the lock so it can't race a save already in
   // flight. `expectedVersion` is the token the admin page loaded with; null means "no check"
@@ -171,7 +187,7 @@ export function getPanelByIp(config, ip) {
 // admin re-adds them ("Add all heads" does it in one click). Any old snapshotFilters are simply
 // left on the object, unread: head filtering is global per head now (config.headFilters), so
 // there is nothing to reattach them to.
-export function migratePanel(panel) {
+function migratePanel(panel) {
   if (Array.isArray(panel.heads)) return panel; // already new shape
   panel.heads = [];
   return panel;
@@ -187,7 +203,7 @@ export function getPanelHead(panel, cardId, headUuid) {
 // override, which is applied at request time — not stored per head.)
 //
 // Resolution: returns the allowed snapshot UUID list, or null = allow all (no filter defined).
-export function resolveAllowedSnapshots(config, panelHead, cardId, headUuid) {
+export function resolveAllowedSnapshots(config, cardId, headUuid) {
   const filters = config.headFilters || {};
   const list = filters[`${cardId}::${headUuid}`];
   return Array.isArray(list) && list.length ? list : null;

@@ -109,8 +109,8 @@ The admin page (`/admin.html`, login-gated) has four tabs:
   the physical grid, toggle "Allow show all", duplicate.
 - **Heads** — per head, choose which snapshots operators may recall, grouped by folder with
   a per-folder select-all checkbox.
-- **Backups & sharing** — scheduled daily backups (dual output: a whole-board archive plus
-  a per-snapshot ZIP) and the auto-share sweep.
+- **Backups & sharing** — scheduled daily backups (each run writes a whole-board archive, a
+  per-snapshot ZIP, and a copy of this app's config) and the auto-share sweep.
 - **Setup** — the card definitions (id / label / board IP) with an inline **storage
   readout** per card (used vs. the board-reported capacity — ~500 MB ceiling — amber at 75%,
   red at 90%), per-card reach tests, **sync diagnostics** (the boards' native card-to-card
@@ -341,12 +341,13 @@ base would crash the whole app at startup, not just backups).
 
 **Change types and what they need:**
 
-- **Frontend-only change** (`public/*`) → redeploy the stack, then hard-refresh open panels
-  (Ctrl+Shift+R). Panels cache aggressively; a panel opened before a redeploy keeps running
-  the old JS until hard-refreshed. Static assets are served no-cache, so a fresh load always
-  gets current code.
+- **Frontend-only change** (`public/*`) → redeploy the stack, then reload open panels. Static
+  assets are served no-cache (see `server/index.js`), so any reload fetches current code — no
+  hard-refresh or cache-clearing is needed. The only reason an open panel keeps running old JS
+  is that its already-loaded page stays in memory until it reloads; the control WebSocket sends
+  a reload on every config save, so a config change reloads them for you.
 - **Backend change** (`server/*`, Dockerfile, compose) → rebuild the container (full stack
-  redeploy), then hard-refresh panels.
+  redeploy), then reload panels.
 
 ## Networking (ipvlan / macvlan)
 
@@ -422,9 +423,13 @@ config/state). Check `git status` is clean of it before committing.
   storage layer if overfilled. The Setup tab shows per-card usage against that ceiling; keep
   an eye on cards trending toward the red threshold.
 - **Full board restore drifts UUIDs.** A full restore from the native GUI replaces heads
-  and their UUIDs, orphaning this app's bindings. "Refresh head names" detects and flags the
-  affected panels; re-add the affected heads from the current board heads rather than
-  expecting auto-repair.
+  and their UUIDs, orphaning this app's bindings. Two admin actions handle it: **"Refresh head
+  names"** detects and flags the affected panels (a red badge + per-head explanation), and
+  **"Re-link heads by name"** repairs them — it matches each stored head to the board's current
+  head of the same name and rewrites the UUID everywhere it's referenced (assignment, layout
+  slot, and snapshot filter). Names are reliably unique per card here, so the match is safe;
+  anything that can't be matched by name is left flagged rather than guessed. This is the same
+  fix the operator's "Head UUID changed" message points to. After re-linking, **Save config**.
 - **Config edits need a restart.** Hand-edits to `/data/config.json` only take effect after
   the container restarts (config is cached at startup). Changes via the admin page apply
   immediately.

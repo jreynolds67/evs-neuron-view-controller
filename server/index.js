@@ -71,9 +71,13 @@ app.use('/api/admin', adminRoutes);
 const server = createServer(app);
 attachControlWs(server);
 
+// Load persisted fullscreen ("solo") state BEFORE we start accepting requests, so isSoloed()
+// is correct from the very first poll. Loading it inside the listen callback left a brief
+// window where a preview request could read the store as empty. loadSoloStore never throws.
+await loadSoloStore();
+
 server.listen(PORT, async () => {
   console.log(`Neuron MV Control listening on :${PORT}`);
-  await loadSoloStore(); // load persisted fullscreen state so isSoloed() is correct from boot
   startShareSweep();
   startBackupScheduler();
   console.log(`Config path: ${process.env.CONFIG_PATH || '/data/config.json'}`);

@@ -231,7 +231,7 @@ async function readBoardBusyState(ip) {
 router.get('/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
-  const { config, panel, card, panelHead } = r;
+  const { config, panel, card } = r;
 
   try {
     const info = await getSnapshotInfo(card.ip);
@@ -240,7 +240,7 @@ router.get('/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
     const showAll = req.query.showAll === '1' && panel.allowShowAll === true;
     const allow = showAll
       ? null
-      : resolveAllowedSnapshots(config, panelHead, req.params.cardId, req.params.headUuid);
+      : resolveAllowedSnapshots(config, req.params.cardId, req.params.headUuid);
     const allowSet = allow ? new Set(allow) : null;
     const includeDeleted = req.query.includeDeleted === '1';
 
@@ -439,7 +439,7 @@ router.post('/cards/:cardId/snapshots/:snapUuid/restore', async (req, res) => {
   const showAllOk = showAll === true && panel.allowShowAll === true;
   const allow = showAllOk
     ? null
-    : resolveAllowedSnapshots(config, panelHead, req.params.cardId, targetHeadUuid);
+    : resolveAllowedSnapshots(config, req.params.cardId, targetHeadUuid);
   if (allow && !allow.includes(req.params.snapUuid)) {
     return res.status(403).json({ error: 'This snapshot isn’t allowed for this head — go back and pick another, or ask an engineer to allow it.' });
   }

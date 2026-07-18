@@ -111,8 +111,6 @@ async function saveConfig() {
   } catch (e) { toast('Save failed: ' + e.message, 'err'); }
 }
 
-const reloadBtn = $('reload');
-if (reloadBtn) reloadBtn.addEventListener('click', loadConfig);
 $('save').addEventListener('click', saveConfig);
 
 // ---- Export / import backup ----------------------------------------------
@@ -159,8 +157,18 @@ $('importFile').addEventListener('change', async (e) => {
     config.headFilters ||= {};
     config.panelGroups ||= [];
     config.settings ||= { showUuids: true };
+    // Apply the same defaults loadConfig() does, so an older export missing these keys doesn't
+    // leave them undefined in the editor (and get written as such on the next Save).
+    config.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
+    config.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30 };
     $('showUuids').checked = config.settings.showUuids !== false;
     renderCards(); renderPanels(); renderHeadFilterCards();
+    // Re-render an open head-filter card, and refresh the Backups tab controls, against the
+    // imported config — otherwise those sections keep showing the PREVIOUS config's values
+    // while a Save would persist the imported ones.
+    if ($('hfCard') && $('hfCard').value) renderGlobalHeadFilters($('hfCard').value);
+    refreshBackup();
+    refreshSweep();
     $('saveState').textContent = 'Imported — review and Save config to apply';
     toast('Backup loaded into editor. Review, then Save config.', 'ok');
   } catch (err) {
@@ -190,6 +198,21 @@ function markClean() {
 function isDirty() {
   if (cleanSnapshot === null) return true;
   try { return JSON.stringify(config) !== cleanSnapshot; } catch { return true; }
+}
+
+// True when the ONLY difference from the clean baseline is the backup block (and the
+// server-managed configVersion). "Back up now" persists just the backup settings through its
+// own endpoint, so after it runs the page is clean IF nothing else was edited — but the user
+// almost always edited the backup fields first, so a plain isDirty() check would read dirty
+// and leave the "unsaved changes" banner up forever. This lets that path re-baseline only when
+// it's genuinely safe (backup was the sole edit), and stay dirty when other edits remain.
+function onlyBackupDirty() {
+  if (cleanSnapshot === null) return false;
+  try {
+    const baseline = JSON.parse(cleanSnapshot);
+    const strip = (c) => JSON.stringify({ ...c, backup: null, configVersion: null });
+    return strip(config) === strip(baseline);
+  } catch { return false; }
 }
 
 function showCfgBanner(msg) {

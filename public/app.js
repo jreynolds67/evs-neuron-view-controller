@@ -365,20 +365,25 @@ async function pickSnapshot(s) {
   state.snap = s;
   state.srcHead = null;
   state.snapViaShowAll = state.showAllActive; // remember it BEFORE the override is cleared
-  state.showAllActive = false; // clicking into a snapshot reverts the temporary override
-  clearShowAllButton();        // leaving the snapshot step hides the footer toggle
   try {
     const { heads, parsed } = await api(
       `/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`);
     if (navStale(token)) return; // operator tapped Back (etc.) during the fetch
 
     if (parsed && heads.length >= 1) {
+      // Committed to the Source step — only now clear the temporary "Show all" override.
+      // Clearing it up front was a trap: if this fetch failed, the operator was left on a
+      // still-unfiltered snapshot list with the override flag gone, so their NEXT pick would
+      // be sent as showAll:false and refused at Load with a dead-end 403.
+      state.showAllActive = false; // clicking into a snapshot reverts the temporary override
+      clearShowAllButton();        // leaving the snapshot step hides the footer toggle
       // Always show the Source step, even for a single option — the operator confirms
       // what they're selecting rather than being advanced past a step silently.
       return renderSourceHeads(heads);
     }
     // Could not parse heads from the snapshot model — do NOT guess. Guessing risks
-    // mapping the wrong head, and we never fall back to a full restore.
+    // mapping the wrong head, and we never fall back to a full restore. The override is left
+    // as-is so the operator can pick another snapshot from the same (unfiltered) list.
     toast('Couldn’t read this snapshot’s heads on the card, so loading is blocked for safety. Try another snapshot, or ask an engineer to check it.', 'err');
   } catch (e) { toast(e.message, 'err'); }
 }

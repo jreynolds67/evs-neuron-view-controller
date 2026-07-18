@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 
 import {
-  loadConfig, saveConfig, getCardById, assignedHeadKeys,
+  loadConfig, saveConfig, updateConfig, getCardById, assignedHeadKeys,
 } from './config.js';
 import {
   getSelf, getSnapshotInfo, getStorageStatus,
@@ -168,6 +168,17 @@ router.put('/config', requireAdmin, async (req, res) => {
   if (dupIp) return res.status(400).json({ error: `Duplicate panel IP: "${dupIp}". Panel IPs must be unique.` });
   (next.panels || []).forEach((p) => { if (!Array.isArray(p.heads)) p.heads = []; });
 
+  // Drop head filters for cards that no longer exist, so deleting a card doesn't leave its
+  // per-head snapshot filters orphaned in the config forever. Filters for a head that's merely
+  // unassigned are KEPT — the head may be reassigned later, and unlike a deleted card the
+  // config can't tell "removed" from "temporarily off a panel". (A deleted card is
+  // unambiguous.)
+  const liveCardIds = new Set(next.cards.map((c) => (c.id || '').trim()).filter(Boolean));
+  for (const key of Object.keys(next.headFilters)) {
+    const idx = key.indexOf('::');
+    if (idx > 0 && !liveCardIds.has(key.slice(0, idx))) delete next.headFilters[key];
+  }
+
   // `admin` is owned by auth (login) and is never sent to or accepted from the client.
   // We ALWAYS take it from stored config and ignore whatever the client sent.
   // (`existing` was loaded above for the version check.)
@@ -185,7 +196,7 @@ router.put('/config', requireAdmin, async (req, res) => {
     if (b.timeHHMM !== undefined && b.timeHHMM !== '' && hhmmToMinutes(b.timeHHMM) === null) {
       return res.status(400).json({ error: `Backup time "${b.timeHHMM}" isn’t a valid 24-hour time (HH:MM).` });
     }
-    next.backup = normalizeBackupConfig(b);
+    next.backup = normalizeBackupConfig(b, existing.backup || {});
   } else if (existing.backup !== undefined) {
     next.backup = existing.backup;
   } else {
@@ -417,18 +428,22 @@ router.put('/backup', requireAdmin, async (req, res) => {
   if (body.timeHHMM && hhmmToMinutes(body.timeHHMM) === null) {
     return res.status(400).json({ error: `Backup time "${body.timeHHMM}" isn’t a valid 24-hour time (HH:MM).` });
   }
-  const config = await loadConfig();
-  config.backup = normalizeBackupConfig(body, config.backup || {});
-  await saveConfig(config);
+  // Patch ONLY the backup block, inside the config write lock. A read-modify-write in the
+  // handler (loadConfig → mutate → saveConfig) would race a concurrent full-config PUT: if that
+  // PUT's write landed first, this save — built from the pre-PUT snapshot — would silently
+  // revert it. updateConfig re-reads the freshest config inside the lock.
+  const saved = await updateConfig((cfg) => {
+    cfg.backup = normalizeBackupConfig(body, cfg.backup || {});
+  });
   // Other admin pages need to know the token moved. Note: 'config-changed' ONLY — no 'reload'.
   // This endpoint exists precisely so "Back up now" doesn't bounce every operator panel
   // mid-show; broadcasting a reload here would reintroduce exactly that on-air side effect.
   // Excludes the caller: "Back up now" writes through here, so without it the very window that
   // pressed the button reported its own write as another session's change, every single time.
-  broadcastControl({ type: 'config-changed', configVersion: config.configVersion }, clientIdOf(req));
-  // configVersion: "Back up now" saves through here, and every saveConfig bumps the token — so
+  broadcastControl({ type: 'config-changed', configVersion: saved.configVersion }, clientIdOf(req));
+  // configVersion: "Back up now" saves through here, and every save bumps the token — so
   // return it, or that button would leave the page unable to save anything else.
-  res.json({ ok: true, config: config.backup, configVersion: config.configVersion });
+  res.json({ ok: true, config: saved.backup, configVersion: saved.configVersion });
 });
 
 router.post('/backup/run', requireAdmin, async (_req, res) => {

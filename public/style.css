@@ -122,6 +122,15 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   border: 1px dashed var(--line); border-radius: var(--radius);
 }
 
+/* "No snapshots available for this head" message inside the snapshot grid. Spans all
+   columns (the grid may still carry head-grid-fixed from the heads view) so it reads as a
+   centered message rather than an unpadded fragment jammed into one cell. */
+.empty-note {
+  grid-column: 1 / -1;
+  padding: 32px 24px; text-align: center; color: var(--ink-dim); line-height: 1.5;
+  border: 1px dashed var(--line); border-radius: var(--radius);
+}
+
 /* Folder header inside the snapshot grid — spans all columns. */
 .group-head {
   grid-column: 1 / -1;

@@ -16,16 +16,38 @@ function renderCards() {
       <td><button class="btn sm del" data-del="${i}">Remove</button></td>`;
     tb.appendChild(tr);
   });
-  tb.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', (e) => {
-    const { i, f } = e.target.dataset; config.cards[+i][f] = e.target.value;
-    // The board-probe caches are keyed by card id, so a changed IP leaves them pointing at
-    // the OLD board for the rest of the page's life — drop them so the next probe is fresh.
-    if (f === 'ip') {
-      cardHeadsCache.delete(config.cards[+i].id);
-      cardSnapsCache.delete(config.cards[+i].id);
-    }
-    if (f === 'label' || f === 'id') renderPanels(); // panel checkboxes show labels
-  }));
+  tb.querySelectorAll('input').forEach((inp) => {
+    // Snapshot the id at focus so an id edit can be cascaded from old → new on commit.
+    let originalId = inp.dataset.f === 'id' ? inp.value : null;
+    inp.addEventListener('focus', (e) => {
+      if (e.target.dataset.f === 'id') originalId = e.target.value;
+    });
+    inp.addEventListener('input', (e) => {
+      const { i, f } = e.target.dataset; config.cards[+i][f] = e.target.value;
+      // The board-probe caches are keyed by card id, so a changed IP leaves them pointing at
+      // the OLD board for the rest of the page's life — drop them so the next probe is fresh.
+      if (f === 'ip') {
+        cardHeadsCache.delete(config.cards[+i].id);
+        cardSnapsCache.delete(config.cards[+i].id);
+      }
+      if (f === 'label') renderPanels(); // panels show card labels in the head source line
+      // NOTE: id changes are handled on 'change' (below), not here — cascading references on
+      // every keystroke would chase a half-typed id.
+    });
+    inp.addEventListener('change', (e) => {
+      if (e.target.dataset.f !== 'id') return;
+      const newId = config.cards[+e.target.dataset.i].id; // already set by the input handler
+      if (newId === originalId) return;
+      // Renaming a card id must move every reference with it, or the head assignments, layout
+      // slots, head filters, backup target, and sweep targets silently orphan (heads show
+      // "(missing card)"; filters/target just stop matching). Cascade, then refresh caches.
+      if (originalId && newId) renameCardIdReferences(originalId, newId);
+      cardHeadsCache.delete(originalId); cardSnapsCache.delete(originalId);
+      cardHeadsCache.delete(newId); cardSnapsCache.delete(newId);
+      originalId = newId;
+      renderPanels(); renderHeadFilterCards();
+    });
+  });
   tb.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', (e) => {
     config.cards.splice(+e.target.dataset.del, 1); renderCards(); renderPanels();
   }));
@@ -91,6 +113,32 @@ async function loadAllStorage() {
 // Escape a string for use inside a CSS attribute selector (card IDs are user-defined).
 function cssEsc(s) {
   return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\\]]/g, '\\$&');
+}
+
+// Cascade a card-id rename across everything keyed by card id: panel head assignments, layout
+// grid slots, the "cardId::headUuid" head-filter keys, the backup target, and sweep targets.
+// Without this, renaming a card id orphans all of them at once — heads render "(missing card)"
+// and filters/target quietly stop matching.
+function renameCardIdReferences(oldId, newId) {
+  (config.panels || []).forEach((p) => {
+    (p.heads || []).forEach((h) => { if (h.cardId === oldId) h.cardId = newId; });
+    (p.layoutGrid || []).forEach((slot) => {
+      if (slot && slot.type === 'head' && slot.cardId === oldId) slot.cardId = newId;
+    });
+  });
+  if (config.headFilters) {
+    Object.keys(config.headFilters).forEach((key) => {
+      const idx = key.indexOf('::');
+      if (idx > 0 && key.slice(0, idx) === oldId) {
+        config.headFilters[newId + key.slice(idx)] = config.headFilters[key];
+        delete config.headFilters[key];
+      }
+    });
+  }
+  if (config.backup && config.backup.cardId === oldId) config.backup.cardId = newId;
+  if (config.shareSweep && Array.isArray(config.shareSweep.targets)) {
+    config.shareSweep.targets = config.shareSweep.targets.map((t) => (t === oldId ? newId : t));
+  }
 }
 
 $('addCard').addEventListener('click', () => {
@@ -905,9 +953,11 @@ $('addPanel').addEventListener('click', () => {
   renderPanels();
 });
 
-// Duplicate a panel: deep-copy everything (heads, layout grid, filters, all settings)
-// EXCEPT the IP — each panel is keyed by its unique IP, so the copy starts blank for you
-// to fill in. The label gets a " (copy)" suffix. Inserted right after the original.
+// Duplicate a panel: deep-copy everything (heads, layout grid, all panel settings) EXCEPT
+// the IP — each panel is keyed by its unique IP, so the copy starts blank for you to fill in.
+// (Snapshot filters aren't panel state — they're global per head in config.headFilters — so
+// there's nothing panel-level to copy there.) The label gets a " (copy)" suffix. Inserted
+// right after the original.
 function duplicatePanel(pi) {
   const src = config.panels[pi];
   const copy = JSON.parse(JSON.stringify(src)); // deep clone, safe for plain config data

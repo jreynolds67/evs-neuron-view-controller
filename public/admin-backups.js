@@ -16,7 +16,9 @@ async function refreshSweep() {
     renderSweepCards();
     const when = s.lastRun ? new Date(s.lastRun).toLocaleTimeString() : 'never';
     $('sweepState').textContent = `Last run ${when}` + (s.lastError ? ` · ${s.lastError}`
-      : ` · shared ${s.shared || 0}, checked ${s.checked || 0}` + (s.failed ? `, FAILED ${s.failed}` : ''));
+      : ` · shared ${s.shared || 0}, checked ${s.checked || 0}`
+        + (s.failed ? `, FAILED ${s.failed}` : '')
+        + (s.unreachable ? `, ${s.unreachable} unreachable` : ''));
   } catch (e) { $('sweepState').textContent = 'Error: ' + e.message; }
 }
 
@@ -55,7 +57,11 @@ $('swRun').addEventListener('click', async () => {
   $('sweepState').textContent = 'Running…';
   try {
     const s = await adminFetch('/api/admin/sharesweep/run', { method: 'POST', headers: headers() }).then(r => r.json());
-    $('sweepState').textContent = `Shared ${s.shared || 0}, checked ${s.checked || 0}` + (s.failed ? `, FAILED ${s.failed}` : '');
+    $('sweepState').textContent = s.skipped
+      ? 'A sweep is already running — try again in a moment.'
+      : `Shared ${s.shared || 0}, checked ${s.checked || 0}`
+        + (s.failed ? `, FAILED ${s.failed}` : '')
+        + (s.unreachable ? `, ${s.unreachable} unreachable` : '');
   } catch (e) { $('sweepState').textContent = 'Error: ' + e.message; }
 });
 
@@ -221,10 +227,17 @@ $('bkRun').addEventListener('click', async () => {
     // Adopt the server's normalised values (retention clamping, time default) so a later main
     // Save doesn't push the un-normalised screen values back over them.
     const saved = await r.json();
+    // Was the backup block the only unsaved change? Decide BEFORE we adopt the server's values,
+    // so we can re-baseline the dirty tracker afterward when it's safe (see below).
+    const backupWasOnlyEdit = onlyBackupDirty();
     if (saved && saved.config) config.backup = saved.config;
     // This endpoint writes config too, so it bumps the concurrency token. Adopt it or the next
     // main "Save config" from this window would be refused as stale.
     if (saved && typeof saved.configVersion === 'number') config.configVersion = saved.configVersion;
+    // The backup settings are now persisted. If they were the ONLY unsaved edit, the page is
+    // clean again — reset the baseline so it doesn't read "unsaved changes" forever over edits
+    // that are actually saved. If other edits remain, leave it dirty (they aren't saved).
+    if (backupWasOnlyEdit) markClean();
     // Start the run, then show it progressing rather than freezing the list until it ends —
     // a whole-board export can take minutes.
     const runReq = adminFetch('/api/admin/backup/run', { method: 'POST', headers: headers() });

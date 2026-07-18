@@ -17,15 +17,18 @@
 //   <stamp>__<cardLabel>__individual.zip    per-snapshot bundle
 //   <stamp>__config.json                    this app's config, minus the admin credential
 
-import { readdir, mkdir, unlink, stat } from 'node:fs/promises';
+import { readdir, mkdir, unlink, stat, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { getSnapshotInfo, normalizeSnapshotEntry, exportSnapshots } from './board.js';
 import { loadConfig, getCardById } from './config.js';
 import { buildZip } from './zip.js';
 import { writeAtomic } from './util.js';
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/data/backups';
+// The scheduled-failure banner state is persisted here so it survives a container restart —
+// see loadScheduledFailure(). Kept out of BACKUP_DIR so it's never mistaken for a backup file.
+const STATE_PATH = process.env.BACKUP_STATE_PATH || '/data/backup-state.json';
 
 let timer = null;
 let backupRunning = false; // guards against concurrent runs (manual during scheduled, etc.)
@@ -116,7 +119,18 @@ export async function runBackupNow() {
 }
 
 async function runBackupInternal() {
-  await ensureDir();
+  // Guard the directory creation: an unwritable /data must degrade to a recorded error, not an
+  // unhandled rejection. This runs from an Express handler AND the minute-tick scheduler; a
+  // throw escaping here would crash the whole process, not just fail one backup.
+  try {
+    await ensureDir();
+  } catch (e) {
+    status.lastRun = Date.now();
+    status.lastError = `Backup directory is not writable: ${e.message}`;
+    status.lastFiles = [];
+    status.lastTargetLabel = null;
+    return status;
+  }
   // Reset the per-run fields up front. Without this, a run whose failures are all swallowed
   // (whole-board export threw, every per-folder fallback threw) falls through to the
   // "if (!status.lastError)" default below still holding the PREVIOUS run's message — and the
@@ -381,9 +395,13 @@ async function prune(config) {
 }
 
 export async function listBackups() {
-  await ensureDir();
   let files;
-  try { files = await readdir(BACKUP_DIR); } catch { return []; }
+  // ensureDir is inside the try: an unwritable /data must return an empty list, not throw out
+  // of the (uncaught) Express handlers that call this.
+  try {
+    await ensureDir();
+    files = await readdir(BACKUP_DIR);
+  } catch { return []; }
   const out = [];
   for (const f of files) {
     if (!isBackupFile(f)) continue;
@@ -402,12 +420,37 @@ export function backupFilePath(file) {
   return join(BACKUP_DIR, file);
 }
 
+// Persist / restore the scheduled-failure banner state. Deployments here are frequent, and a
+// restart would otherwise clear an active "last night's scheduled backup failed" banner until
+// the NEXT scheduled run — up to a day later. Mirrors solostore's tolerant load: a missing or
+// malformed file is treated as "no failure" (exactly the in-memory default), so persistence can
+// only add signal, never invent it. Only the scheduler writes scheduledFailure, so only it persists.
+async function persistScheduledFailure() {
+  try {
+    const dir = dirname(STATE_PATH);
+    if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+    await writeAtomic(STATE_PATH, JSON.stringify({ scheduledFailure: status.scheduledFailure }, null, 2));
+  } catch (e) {
+    console.log(`[backup] could not persist failure state: ${e.message}`);
+  }
+}
+async function loadScheduledFailure() {
+  try {
+    const parsed = JSON.parse(await readFile(STATE_PATH, 'utf8'));
+    if (parsed && typeof parsed === 'object' && parsed.scheduledFailure) {
+      status.scheduledFailure = parsed.scheduledFailure;
+    }
+  } catch { /* missing/malformed → leave null (no banner), same as a fresh boot */ }
+}
+
 // Scheduler: checks every minute whether the configured HH:MM has arrived today and the
 // backup hasn't run yet today.
 let lastRunDate = null;
 export function startBackupScheduler() {
   sweepTmp(); // clear any temp files left by a backup interrupted mid-write
+  loadScheduledFailure(); // restore any failure banner from before a restart
   const tick = async () => {
+   try {
     status.nextCheck = Date.now();
     const config = await loadConfig();
     const bcfg = config.backup || {};
@@ -449,7 +492,14 @@ export function startBackupScheduler() {
         status.scheduledFailure = { at: Date.now(), reason, message: err, cardLabel: result.lastTargetLabel || null };
         console.warn(`[backup] scheduled backup FAILED (${reason}): ${err}`);
       }
+      // Persist the classified outcome so the banner survives a restart (see loadScheduledFailure).
+      persistScheduledFailure();
     }
+   } catch (e) {
+     // The tick runs under setInterval, which has no error handling: a throw here becomes an
+     // unhandled rejection and takes the process down. Contain it — the next minute retries.
+     console.warn(`[backup] scheduler tick error: ${e.message}`);
+   }
   };
   timer = setInterval(tick, 60000);
   timer.unref?.();

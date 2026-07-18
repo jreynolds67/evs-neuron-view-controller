@@ -22,7 +22,7 @@ const SYNC_TRIGGER_STAGGER_MS = 1000;
 // boards have settled from the metadata writes (each PUT is async and leaves a board in
 // 'updating-file') before we ask them to sync.
 const SYNC_TRIGGER_DELAY_MS = 6000;
-const status = { lastRun: null, lastError: null, shared: 0, checked: 0, failed: 0, enabled: false, targets: [] };
+const status = { lastRun: null, lastError: null, shared: 0, checked: 0, failed: 0, unreachable: 0, enabled: false, targets: [] };
 
 function resolveTargets(config) {
   const cfg = config.shareSweep || {};
@@ -40,14 +40,17 @@ function resolveTargets(config) {
 async function sweepOnce() {
   if (running) return;
   running = true;
-  let shared = 0, checked = 0, failed = 0;
+  let shared = 0, checked = 0, failed = 0, unreachable = 0;
   try {
     const config = await loadConfig();
     const targets = resolveTargets(config);
     status.targets = targets.map((t) => t.label);
     for (const t of targets) {
       let info;
-      try { info = await getSnapshotInfo(t.ip); } catch { continue; }
+      // A board we can't even list is COUNTED, not silently skipped. Otherwise a sweep where
+      // every target was down reads as "shared 0, checked 0" with no error — indistinguishable
+      // from a clean run over boards that had nothing to share.
+      try { info = await getSnapshotInfo(t.ip); } catch { unreachable++; continue; }
       const entries = (info.snapshots || [])
         .map(normalizeSnapshotEntry)
         // Skip read-only snapshots: 1.13 marks some snapshots readOnly, and a metadata PUT
@@ -74,13 +77,16 @@ async function sweepOnce() {
     status.shared = shared;
     status.checked = checked;
     status.failed = failed;
+    status.unreachable = unreachable;
     if (shared) console.log(`[share-sweep] shared ${shared} snapshot(s) across ${targets.length} target(s)`);
     if (failed) console.warn(`[share-sweep] ${failed} share write(s) FAILED this sweep`);
+    if (unreachable) console.warn(`[share-sweep] ${unreachable} target(s) unreachable this sweep`);
 
     // Newly shared something → trigger a native sync on EVERY target so the change propagates
     // promptly instead of waiting out the board's (now longer) native sync interval. Staggered
-    // ~2s apart for load management; a failure/unreachable board is non-fatal (next sweep, or
-    // the board's own schedule, will catch up). Each trigger is logged by boardFetch.
+    // ~1s apart (SYNC_TRIGGER_STAGGER_MS) for load management; a failure/unreachable board is
+    // non-fatal (next sweep, or the board's own schedule, will catch up). Each trigger is
+    // logged by boardFetch.
     if (shared > 0) {
       // Let the boards settle from the metadata writes before triggering sync.
       await new Promise((r) => setTimeout(r, SYNC_TRIGGER_DELAY_MS));
@@ -125,6 +131,11 @@ export function shareSweepStatus() {
 }
 
 export async function runShareSweepNow() {
+  // If a sweep is already in progress, sweepOnce() returns immediately and the status still
+  // describes the PREVIOUS run — reporting that as this run's result is misleading. Tell the
+  // caller nothing new ran instead. (Checked before the await, so no interleaving: sweepOnce
+  // sets `running` synchronously at its start.)
+  if (running) return { ...shareSweepStatus(), skipped: true };
   await sweepOnce();
   return shareSweepStatus();
 }

@@ -219,7 +219,7 @@ export function normalizeSnapshotEntry(entry) {
   return { uuid: null };
 }
 
-export async function getSnapshotMeta(ip, uuid) {
+async function getSnapshotMeta(ip, uuid) {
   const m = await boardFetch(ip, `/snapshots/${uuid}`);
   if (m && typeof m === 'object') {
     // Canonical read fields for callers: timestamp <- updatedAt | createdAt,
