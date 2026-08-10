@@ -216,6 +216,10 @@ body.strip .footer-clock { font-size: 12px; }
 .sheet {
   width: min(640px, 92vw); background: var(--panel);
   border: 1px solid var(--line); border-radius: 14px; padding: 24px;
+  /* Never taller than the overlay it's centered in — if content ever exceeds the panel
+     height (notably the 291px CTP strip), scroll inside the sheet rather than pushing the
+     Load/Cancel buttons off-screen. */
+  max-height: calc(100% - 24px); overflow-y: auto;
 }
 .sheet h3 { font-size: 20px; margin-bottom: 6px; }
 .confirm-lines { margin: 16px 0; display: grid; gap: 10px; }
@@ -265,7 +269,23 @@ body.strip .sheet .row .btn { min-height: 46px; }
 .bkbanner-x:hover { background: rgba(255,255,255,0.08); }
 
 /* ---- Strip layout: 1835 x 291 ---- */
-body.strip .stage { padding: 6px 12px; }
+/* CTP panels must render at the exact physical panel size regardless of what the embedded
+   browser reports for the viewport. Some panels expose a scrollable viewport TALLER than the
+   291px screen; with the default height:100% shell that pushed the action bar (and the
+   centered confirm sheet) below the visible strip. Pin the shell — and the confirm overlay —
+   to a fixed 1835x291 box at the top-left so nothing can drift off-screen or scroll. */
+body.strip .app {
+  position: fixed; top: 0; left: 0;
+  width: 1835px; height: 291px;
+}
+/* The confirm overlay is normally inset:0 (the whole viewport). On a tall viewport that centers
+   the sheet off the physical screen — clamp it to the same fixed 1835x291 box. */
+body.strip .overlay {
+  inset: 0 auto auto 0; width: 1835px; height: 291px;
+}
+/* min-height:0 — flex item default min-height:auto would let the grid refuse to shrink and
+   shove the action bar past the fixed bottom edge; 0 lets the stage scroll internally. */
+body.strip .stage { padding: 6px 12px; min-height: 0; }
 body.strip .stage-head { margin: 2px 0 8px; }
 body.strip .stage-head h2 { font-size: 17px; }
 body.strip .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
