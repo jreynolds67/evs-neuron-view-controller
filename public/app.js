@@ -1,17 +1,19 @@
 // public/app.js
-// Operator flow: Head (target) -> Snapshot -> pick source head -> Confirm -> fire partial restore.
+// Operator flow: pick a Head (target) -> unified per-head menu. The menu's LEFT pane is a
+// scrollable list of the snapshots permitted to that head (collapsible; expand a snapshot to
+// see its source-head previews); tapping a preview asks to Confirm, then fires a partial
+// restore. The RIGHT pane is the always-on live input-group editor for the same head.
 // The panel is identified server-side by its source IP; this client never sees board IPs.
 
 const state = {
   panel: null,
-  step: 'head',
+  step: 'head',   // 'head' (picker screen) | 'menu' (unified per-head screen)
   head: null,     // assigned head { cardId, headUuid, label }
-  snap: null,     // { uuid, name, ... }
-  srcHead: null,  // snapshot source head { uuid, name }
+  snap: null,     // { uuid, name, ... } — the snapshot behind a pending Confirm
+  srcHead: null,  // snapshot source head { uuid, name } — the pick behind a pending Confirm
   showUuids: true,
-  showAllActive: false, // temporary "Show all" override on the snapshot step
-  // Whether the CHOSEN snapshot was reached under that override. showAllActive is cleared the
-  // moment we leave the snapshot step, so it can't be read at Load time — but the restore has
+  showAllActive: false, // "Show all" override for the menu's snapshot list
+  // Whether the list the pending pick came from was fetched under "Show all". The restore has
   // to tell the server the pick came from "Show all", or the server re-applies the per-head
   // filter and refuses it.
   snapViaShowAll: false,
@@ -20,11 +22,11 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const grid = $('grid');
 
-// Stale-response guard. Each navigation (step change, Back, restart, picking a head or
-// snapshot) bumps navSeq. An async render captures the value before its await and bails if
-// navSeq has since moved — meaning the operator navigated away while a slow board fetch was
-// in flight. Without this, a response arriving after Back reads a now-null state.snap/head
-// and throws, wedging the UI. bumpNav() returns the new token for the caller to capture.
+// Stale-response guard. Each navigation (screen change, Home, picking a head, re-fetching the
+// snapshot list) bumps navSeq. An async render captures the value before its await and bails if
+// navSeq has since moved — meaning the operator navigated away while a slow board fetch was in
+// flight. Without this, a response arriving after Home reads a now-null state and throws,
+// wedging the UI. bumpNav() returns the new token for the caller to capture.
 let navSeq = 0;
 function bumpNav() { return ++navSeq; }
 function navStale(token) { return token !== navSeq; }
@@ -33,15 +35,17 @@ function navStale(token) { return token !== navSeq; }
 const { byName, groupSnapshotsByFolder } = NV;
 
 function toast(msg, kind = '') {
-  // When the fullscreen input editor is open it covers the page, hiding the normal toast.
-  // Route to the overlay's own toast so the operator sees errors without closing the editor.
-  const fsOpen = $('fsOverlay') && $('fsOverlay').classList.contains('show');
-  const t = fsOpen ? $('fsToast') : $('toast');
+  // On the menu screen the right-pane editor has its own toast so an editor error shows next to
+  // it; but a Confirm dialog covers the page, so while it's open route back to the main toast.
+  const menuOpen = $('screenMenu').classList.contains('show');
+  const confirmOpen = $('overlay').classList.contains('show');
+  const useFs = menuOpen && !confirmOpen;
+  const t = useFs ? $('fsToast') : $('toast');
   if (!t) return;
   t.textContent = msg;
-  t.className = `toast${fsOpen ? ' fs-toast' : ''} show ${kind}`;
+  t.className = `toast${useFs ? ' fs-toast' : ''} show ${kind}`;
   clearTimeout(t._t);
-  t._t = setTimeout(() => { t.className = `toast${fsOpen ? ' fs-toast' : ''}`; }, 3200);
+  t._t = setTimeout(() => { t.className = `toast${useFs ? ' fs-toast' : ''}`; }, 3200);
 }
 
 async function api(path, opts) {
@@ -57,27 +61,10 @@ async function api(path, opts) {
   return body;
 }
 
-function setSteps() {
-  const order = ['head', 'snap', 'source', 'confirm'];
-  const idx = order.indexOf(state.step);
-  document.querySelectorAll('.step').forEach((el) => {
-    const i = order.indexOf(el.dataset.step);
-    el.classList.toggle('active', i === idx);
-    el.classList.toggle('done', i < idx);
-  });
-  $('backBtn').disabled = state.step === 'head';
-}
-
-function cardEl({ k, v, uuid, onClick, selected }) {
-  const b = document.createElement('button');
-  b.className = 'card' + (selected ? ' selected' : '');
-  const showUuid = uuid && state.showUuids;
-  b.innerHTML = `<span class="k"></span>${v ? '<span class="v"></span>' : ''}${showUuid ? '<span class="uuid mono"></span>' : ''}`;
-  b.querySelector('.k').textContent = k;
-  if (v) b.querySelector('.v').textContent = v;
-  if (showUuid) b.querySelector('.uuid').textContent = uuid;
-  b.addEventListener('click', onClick);
-  return b;
+// Toggle between the two screens (head picker / unified menu).
+function showScreen(name) {
+  $('screenHeads').classList.toggle('show', name === 'head');
+  $('screenMenu').classList.toggle('show', name === 'menu');
 }
 
 // ---- Head/snapshot preview renderer ---------------------------------------
@@ -218,15 +205,15 @@ function showEmpty(msg) {
   grid.appendChild(d);
 }
 
-// ---- Steps ----------------------------------------------------------------
+// ---- Screen A: head picker ------------------------------------------------
 
 async function renderHeads() {
   bumpNav();
-  state.step = 'head'; setSteps();
+  state.step = 'head';
   state.head = null; state.snap = null; state.srcHead = null;
   state.showAllActive = false; // heads view always starts from the filtered state
   state.snapViaShowAll = false;
-  clearShowAllButton();        // the footer toggle only belongs on the snapshot step
+  showScreen('head');
   $('stageTitle').textContent = 'Select a head';
   $('stageHint').textContent = '';
   grid.innerHTML = '';
@@ -266,23 +253,12 @@ async function renderHeads() {
       <div class="card-body">
         <span class="k"></span>
         <span class="uuid mono"></span>
-      </div>
-      <button class="expand-btn" title="Full screen inputs" aria-label="Full screen inputs">⤢</button>`;
+      </div>`;
     card.querySelector('.k').textContent = h.label || 'Head';
     if (state.showUuids) card.querySelector('.uuid').textContent = h.headUuid;
     else card.querySelector('.uuid').remove();
-    card.addEventListener('click', () => { state.head = h; state.showAllActive = false; stopPreviewPolling(); renderSnapshots(); });
-
-    // Fullscreen input-group editor is 1920x1080 only — not on the strip.
-    const expand = card.querySelector('.expand-btn');
-    if (state.panel.layout === 'strip') {
-      expand.remove();
-    } else {
-      expand.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openFullscreen(h);
-      });
-    }
+    // Tapping a head opens its unified menu (snapshot list + live editor).
+    card.addEventListener('click', () => openMenu(h));
 
     grid.appendChild(card);
     const prevSlot = card.querySelector('[data-prev]');
@@ -295,8 +271,25 @@ async function renderHeads() {
   startPreviewPolling();
 }
 
-// Render the "Show all" toggle into the footer slot. Only appears on the snapshot step
-// and only when this panel is permitted to show all. Clearing the slot removes it.
+// ---- Screen B: unified per-head menu --------------------------------------
+
+// Open the menu for a head: left pane = its snapshot list, right pane = its live editor.
+function openMenu(head) {
+  bumpNav();
+  state.head = head;
+  state.step = 'menu';
+  state.snap = null; state.srcHead = null;
+  state.showAllActive = false;
+  state.snapViaShowAll = false;
+  stopPreviewPolling(); // the heads grid is hidden now
+  showScreen('menu');
+  $('menuHeadLabel').textContent = head.label || 'Head';
+  renderMenuList();  // left pane
+  openEditor(head);  // right pane
+}
+
+// The "Show all" toggle lives in the left-pane header. Only shown when the panel is permitted
+// to show all; toggling it re-fetches the snapshot list under the override.
 function renderShowAllButton() {
   const slot = $('showAllSlot');
   if (!slot) return;
@@ -305,7 +298,7 @@ function renderShowAllButton() {
   const btn = document.createElement('button');
   btn.className = 'btn ghost showall-btn' + (state.showAllActive ? ' on' : '');
   btn.textContent = state.showAllActive ? 'Showing all — tap to filter' : 'Show all snapshots';
-  btn.addEventListener('click', () => { state.showAllActive = !state.showAllActive; renderSnapshots(); });
+  btn.addEventListener('click', () => { state.showAllActive = !state.showAllActive; renderMenuList(); });
   slot.appendChild(btn);
 }
 function clearShowAllButton() {
@@ -313,140 +306,127 @@ function clearShowAllButton() {
   if (slot) slot.innerHTML = '';
 }
 
-async function renderSnapshots() {
+function showListMsg(cls, msg) {
+  const list = $('snapList');
+  list.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = msg;
+  list.appendChild(d);
+}
+
+// Left pane: the snapshots permitted to this head, grouped by folder, each a collapsible row.
+async function renderMenuList() {
   const token = bumpNav();
-  state.step = 'snap'; setSteps();
-  state.snap = null; state.srcHead = null;
-  $('stageTitle').textContent = 'Select a snapshot';
-  $('stageHint').textContent = state.head.label;
-  showEmpty('Loading snapshots…');
+  renderShowAllButton();
+  showListMsg('empty', 'Loading snapshots…');
   try {
     const qs = state.showAllActive ? '?showAll=1' : '';
     const { snapshots, state: boardState } = await api(
       `/api/panel/cards/${state.head.cardId}/heads/${state.head.headUuid}/snapshots${qs}`);
     if (navStale(token)) return; // operator navigated away during the fetch
-    grid.innerHTML = '';
+    const list = $('snapList');
+    list.innerHTML = '';
     if (boardState && boardState !== 'idle') {
       toast(`Card is busy (${boardState}) — wait a moment and try loading again.`, 'err');
     }
-
-    // "Show all" control lives in the footer action bar (centered), not in the snapshot
-    // grid. Only shown when the panel permits it; reverts automatically on navigation away.
-    renderShowAllButton();
-
     if (!snapshots.length) {
-      const note = document.createElement('div');
-      note.className = 'empty-note';
-      note.textContent = 'No snapshots are available for this head. If you expected some, ask an engineer to allow them for this head.';
-      grid.appendChild(note);
-      return;
+      return showListMsg('empty-note',
+        'No snapshots are available for this head. If you expected some, ask an engineer to allow them for this head.');
     }
-
-    // Group by folder (path); blank path = "Ungrouped", shown last (shared.js).
+    // Folder headers (blank path = "Ungrouped", shown last) with a collapsible row per snapshot.
     groupSnapshotsByFolder(snapshots).forEach(({ label, snapshots: snaps }) => {
       const header = document.createElement('div');
       header.className = 'group-head';
       header.textContent = label;
-      grid.appendChild(header);
-      snaps.sort(byName).forEach((s) => {
-        const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
-        grid.appendChild(cardEl({
-          k: s.name, v: [s.description, when].filter(Boolean).join('  ·  '),
-          onClick: () => pickSnapshot(s),
-        }));
-      });
+      list.appendChild(header);
+      snaps.sort(byName).forEach((s) => list.appendChild(snapRow(s)));
     });
-  } catch (e) { showEmpty(e.message); }
+  } catch (e) { showListMsg('empty', e.message); }
 }
 
-// After choosing a snapshot, resolve which source head inside it maps to the target.
-async function pickSnapshot(s) {
-  const token = bumpNav();
-  state.snap = s;
-  state.srcHead = null;
-  state.snapViaShowAll = state.showAllActive; // remember it BEFORE the override is cleared
+// One collapsible snapshot row. Its source-head previews are fetched lazily the first time
+// it's expanded, then kept in the DOM for instant re-open.
+function snapRow(s) {
+  const row = document.createElement('div');
+  row.className = 'snap-row';
+  const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'snap-row-head';
+  head.innerHTML = '<span class="txt"><span class="k"></span><span class="v"></span></span><span class="chev">›</span>';
+  head.querySelector('.k').textContent = s.name;
+  head.querySelector('.v').textContent = [s.description, when].filter(Boolean).join('  ·  ');
+  const body = document.createElement('div');
+  body.className = 'snap-body';
+  head.addEventListener('click', () => toggleSnap(row, s, body));
+  row.append(head, body);
+  return row;
+}
+
+async function toggleSnap(row, s, body) {
+  const opening = !row.classList.contains('open');
+  row.classList.toggle('open', opening);
+  if (!opening || body.dataset.loaded === '1') return; // collapse, or already loaded
+  body.innerHTML = '<div class="preview-loading" style="padding:12px">Loading previews…</div>';
+  const token = navSeq; // re-rendering the list bumps navSeq and detaches this row
   try {
-    const { heads, parsed } = await api(
-      `/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`);
-    if (navStale(token)) return; // operator tapped Back (etc.) during the fetch
-
-    if (parsed && heads.length >= 1) {
-      // Committed to the Source step — only now clear the temporary "Show all" override.
-      // Clearing it up front was a trap: if this fetch failed, the operator was left on a
-      // still-unfiltered snapshot list with the override flag gone, so their NEXT pick would
-      // be sent as showAll:false and refused at Load with a dead-end 403.
-      state.showAllActive = false; // clicking into a snapshot reverts the temporary override
-      clearShowAllButton();        // leaving the snapshot step hides the footer toggle
-      // Always show the Source step, even for a single option — the operator confirms
-      // what they're selecting rather than being advanced past a step silently.
-      return renderSourceHeads(heads);
+    // Source heads inside the snapshot, plus a batched request for ALL their layouts.
+    const [{ heads, parsed }, { heads: byHead }] = await Promise.all([
+      api(`/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`),
+      api(`/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/previews`),
+    ]);
+    if (navStale(token)) return;
+    body.innerHTML = '';
+    if (!parsed || !heads.length) {
+      // Couldn't read the snapshot's heads — do NOT guess; block loading for safety.
+      const n = document.createElement('div');
+      n.className = 'preview-note err';
+      n.textContent = 'Couldn’t read this snapshot’s heads on the card, so loading is blocked for safety. Try another snapshot, or ask an engineer to check it.';
+      body.appendChild(n);
+      return;
     }
-    // Could not parse heads from the snapshot model — do NOT guess. Guessing risks
-    // mapping the wrong head, and we never fall back to a full restore. The override is left
-    // as-is so the operator can pick another snapshot from the same (unfiltered) list.
-    toast('Couldn’t read this snapshot’s heads on the card, so loading is blocked for safety. Try another snapshot, or ask an engineer to check it.', 'err');
-  } catch (e) { toast(e.message, 'err'); }
-}
-
-function renderSourceHeads(heads) {
-  const token = navSeq; // pickSnapshot already bumped; capture the current value
-  state.step = 'source'; setSteps();
-  // Defensive: if state was cleared underneath us (e.g. Start Over between the heads
-  // fetch resolving and this render), abort rather than dereference a null snap/head.
-  if (!state.snap || !state.head) return;
-  $('stageTitle').textContent = 'Select source head in snapshot';
-  $('stageHint').textContent = `${state.snap.name} → ${state.head.label}`;
-  grid.innerHTML = '';
-
-  const sorted = heads.slice().sort(byName);
-  const previewSlots = new Map(); // headUuid -> preview container
-
-  sorted.forEach((h) => {
-    const card = document.createElement('button');
-    card.className = 'card card-with-preview' + (state.srcHead?.uuid === h.uuid ? ' selected' : '');
-    card.innerHTML = `
-      <div class="card-preview" data-prev></div>
-      <div class="card-body">
-        <span class="k"></span>
-        <span class="uuid mono"></span>
-      </div>`;
-    card.querySelector('.k').textContent = h.name || 'Head';
-    if (state.showUuids) card.querySelector('.uuid').textContent = h.uuid;
-    else card.querySelector('.uuid').remove();
-    card.addEventListener('click', () => { state.srcHead = h; openConfirm(); });
-    grid.appendChild(card);
-    const slot = card.querySelector('[data-prev]');
-    slot.innerHTML = '<div class="preview-loading">Loading preview…</div>';
-    previewSlots.set(h.uuid, slot);
-  });
-
-  // One batched request for ALL source-head layouts, then render each locally — far
-  // faster than a separate model fetch per head.
-  api(`/api/panel/cards/${state.head.cardId}/snapshots/${state.snap.uuid}/previews`)
-    .then(({ heads: byHead }) => {
-      if (navStale(token)) return; // navigated away (Back/Start Over) while previews loaded
-      previewSlots.forEach((slot, uuid) => {
-        const widgets = (byHead && byHead[uuid]) || [];
-        slot.innerHTML = '';
-        slot.appendChild(buildPreviewSvg(widgets));
-      });
-    })
-    .catch((e) => {
-      if (navStale(token)) return;
-      previewSlots.forEach((slot) => {
-        // Board-originated text can reach e.message — never interpolate it into HTML.
-        const n = document.createElement('div');
-        n.className = 'preview-note err';
-        n.textContent = e.message;
-        slot.replaceChildren(n);
-      });
+    const wrap = document.createElement('div');
+    wrap.className = 'snap-previews';
+    heads.slice().sort(byName).forEach((h) => {
+      const card = document.createElement('button');
+      card.className = 'card card-with-preview';
+      card.innerHTML = `
+        <div class="card-preview" data-prev></div>
+        <div class="card-body">
+          <span class="k"></span>
+          <span class="uuid mono"></span>
+        </div>`;
+      card.querySelector('.k').textContent = h.name || 'Head';
+      if (state.showUuids) card.querySelector('.uuid').textContent = h.uuid;
+      else card.querySelector('.uuid').remove();
+      const slot = card.querySelector('[data-prev]');
+      slot.appendChild(buildPreviewSvg((byHead && byHead[h.uuid]) || []));
+      // Tapping a source-head preview asks to confirm, then loads it onto the target head.
+      card.addEventListener('click', () => pickForConfirm(s, h));
+      wrap.appendChild(card);
     });
+    body.appendChild(wrap);
+    body.dataset.loaded = '1';
+  } catch (e) {
+    body.innerHTML = '';
+    const n = document.createElement('div');
+    n.className = 'preview-note err'; // board-originated text can reach e.message — never HTML-interpolate
+    n.textContent = e.message;
+    body.appendChild(n);
+  }
 }
 
 // ---- Confirm + fire -------------------------------------------------------
 
+function pickForConfirm(s, h) {
+  state.snap = s;
+  state.srcHead = h;
+  state.snapViaShowAll = state.showAllActive; // remember how this list was fetched
+  openConfirm();
+}
+
 function openConfirm() {
-  state.step = 'confirm'; setSteps();
   // Compact one-line summary so the dialog fits the short strip panels.
   $('confirmLines').innerHTML = '<div class="confirm-summary"></div>';
   $('confirmLines').querySelector('.confirm-summary').textContent =
@@ -456,7 +436,6 @@ function openConfirm() {
 
 function closeConfirm() {
   $('overlay').classList.remove('show');
-  state.step = 'source'; setSteps();
 }
 
 async function fire() {
@@ -474,9 +453,9 @@ async function fire() {
     });
     $('overlay').classList.remove('show');
     toast(`Loaded "${state.snap.name}" onto ${state.head.label}`, 'ok');
-    // Return to the heads view after a successful load.
-    state.head = state.snap = state.srcHead = null;
-    renderHeads();
+    // Stay on the head's menu; the load changed its live layout, so refresh the right-pane editor.
+    state.snap = state.srcHead = null;
+    fsRefreshNow();
   } catch (e) {
     if (e.code === 'BOARD_BUSY' || e.code === 'HEAD_STALE') {
       // Both are clean failures where nothing was applied: BOARD_BUSY means the board was
@@ -503,17 +482,14 @@ async function fire() {
 
 // ---- Navigation -----------------------------------------------------------
 
-function back() {
-  bumpNav(); // invalidate any in-flight fetch from the step we're leaving
-  state.showAllActive = false; // any back-navigation reverts the temporary override
-  if (state.step === 'snap') return renderHeads();
-  if (state.step === 'source') return renderSnapshots();
-  if (state.step === 'confirm') return closeConfirm();
-}
-
-function restart() {
+// Home: leave the menu and return to the head picker. (There is no Back — the menu is a single
+// screen, so the only navigation out of it is Home.)
+function goHome() {
+  bumpNav();
+  stopEditor();
   state.head = state.snap = state.srcHead = null;
   state.showAllActive = false;
+  clearShowAllButton();
   renderHeads();
 }
 
@@ -662,24 +638,23 @@ async function fetchFsData(head) {
   return { widgets: preview.widgets || [], groups: groups || [], soloed: !!preview.soloed };
 }
 
-async function openFullscreen(head) {
-  stopPreviewPolling(); // the editor covers the heads grid; don't poll behind it
-  const ov = $('fsOverlay');
-  ov.classList.add('show');
-  $('fsTitle').textContent = head.label || 'Head';
-  $('fsBody').innerHTML = '<div class="preview-loading" style="padding:40px">Loading windows…</div>';
+// Load the right-pane live editor for a head. Called when the menu opens (and re-used by the
+// polling/refresh paths). The editor is always visible on the menu screen — no overlay.
+async function openEditor(head) {
+  hideKeypad(); // any prior selection is gone once we (re)open the editor
+  $('fsStageWrap').innerHTML = '<div class="preview-loading" style="padding:40px">Loading windows…</div>';
 
   try {
     fsState = { head, ...(await fetchFsData(head)) };
     renderFullscreen();
-    startFullscreenPolling(); // keep the enlarged view live to recalls from other panels
+    startFullscreenPolling(); // keep the editor live to recalls from other panels
   } catch (e) {
     // Board-originated text can reach e.message — never interpolate it into HTML.
     const n = document.createElement('div');
     n.className = 'preview-note err';
     n.style.padding = '40px';
     n.textContent = e.message;
-    $('fsBody').replaceChildren(n);
+    $('fsStageWrap').replaceChildren(n);
   }
 }
 
@@ -687,7 +662,7 @@ async function openFullscreen(head) {
 // refresh so we never yank the field they're editing. Their edit commits on Enter as normal;
 // the next poll cycle then reflects reality.
 function fsIsEditing() {
-  return !!$('fsOverlay').querySelector('.fs-window.editing');
+  return !!$('fsEditor').querySelector('.fs-window.editing');
 }
 
 // Poll the enlarged view so a snapshot recalled from ANOTHER panel redraws it. This runs even
@@ -741,17 +716,12 @@ async function fsRefreshNow() {
   } catch { /* leave current view on failure */ }
 }
 
-function closeFullscreen() {
+// Tear down the right-pane editor (called on Home). The heads-grid preview polling is resumed
+// by renderHeads(), which goHome() calls right after.
+function stopEditor() {
   stopFullscreenPolling();
-  $('fsOverlay').classList.remove('show');
+  hideKeypad();
   fsState = null;
-  if (state.step === 'head') {
-    // The grid was frozen while the editor was open, so its previews may be stale (e.g. a
-    // recall from another panel landed meanwhile). Refresh now rather than waiting a poll
-    // cycle, then resume polling.
-    refreshVisiblePreviews();
-    startPreviewPolling();
-  }
 }
 
 function groupByUuid(uuid) {
@@ -762,8 +732,9 @@ function groupByNumber(num) {
 }
 
 function renderFullscreen() {
-  const body = $('fsBody');
+  const body = $('fsStageWrap');
   body.innerHTML = '';
+  hideKeypad(); // a full redraw only happens when nothing is being edited
   const { widgets } = fsState;
   const soloView = fsIsSoloView(); // see fsIsSoloView: requires the head to really have 1 widget
 
@@ -775,7 +746,7 @@ function renderFullscreen() {
       ? 'Fullscreen — press and hold to restore the layout'
       : 'Tap a window to change its input · press and hold to make it fullscreen';
   }
-  $('fsOverlay').classList.toggle('soloed', soloView);
+  $('fsEditor').classList.toggle('soloed', soloView);
 
   // 16:9 stage that fills the available space.
   const stage = document.createElement('div');
@@ -809,10 +780,10 @@ function addLongPress(el, handler, ms = 500) {
 
 // A full-editor "working" overlay, shown the INSTANT a hold registers and held until the board
 // finishes and the view redraws. It tells the operator the hold took and they can release —
-// covering the natural delay while the board rebuilds the layout. It's inside fsBody, so
-// renderFullscreen() (which clears fsBody) removes it automatically.
+// covering the natural delay while the board rebuilds the layout. It's inside the stage wrap,
+// so renderFullscreen() (which clears the wrap) removes it automatically.
 function showFsWorking(msg) {
-  const body = $('fsBody');
+  const body = $('fsStageWrap');
   if (!body) return;
   let el = body.querySelector('.fs-working');
   if (!el) { el = document.createElement('div'); el.className = 'fs-working'; body.appendChild(el); }
@@ -822,7 +793,7 @@ function showFsWorking(msg) {
   span.textContent = msg;
   el.appendChild(span);
 }
-function hideFsWorking() { $('fsBody')?.querySelector('.fs-working')?.remove(); }
+function hideFsWorking() { $('fsStageWrap')?.querySelector('.fs-working')?.remove(); }
 
 // Blow one window up to fullscreen (server captures the head, deletes the others, fullscreens
 // this one video-only). Refreshes to the soloed state on success.
@@ -856,6 +827,56 @@ async function unsoloWindow() {
   finally { fsBusy = false; }
 }
 
+// ---- On-screen numeric keypad --------------------------------------------
+// The CTP touchscreen has no physical keyboard, so input-group numbers are typed on this
+// keypad. It's shown for BOTH layouts (on 1080 the operator can still use a real keyboard).
+// The keypad drives whichever window's input is currently open (.fs-window.editing), so it
+// needs no per-window wiring — it just targets the live editing field.
+
+function activeFsInput() {
+  const win = $('fsEditor').querySelector('.fs-window.editing');
+  return win ? win.querySelector('.fs-win-input') : null;
+}
+function showKeypad() {
+  const pad = $('fsKeypad');
+  if (pad) { pad.classList.add('show'); pad.setAttribute('aria-hidden', 'false'); }
+}
+function hideKeypad() {
+  const pad = $('fsKeypad');
+  if (pad) { pad.classList.remove('show'); pad.setAttribute('aria-hidden', 'true'); }
+}
+
+// Apply one keypad press to the open input. Enter is routed through the field's existing
+// keydown handler so the exact same commit() path runs (keypad and hardware Enter converge).
+function fsKeyPress(key) {
+  const input = activeFsInput();
+  if (!input) return;
+  if (key === 'enter') {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    return;
+  }
+  if (key === 'back') { input.value = input.value.slice(0, -1); return; }
+  if (/^[0-9]$/.test(key) && input.value.length < 4) input.value += key;
+}
+
+function buildKeypad() {
+  const pad = $('fsKeypad');
+  if (!pad) return;
+  pad.innerHTML = '';
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'enter'].forEach((k) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fs-key' + (k === 'enter' ? ' enter' : k === 'back' ? ' back' : '');
+    b.textContent = k === 'back' ? '⌫' : k === 'enter' ? '✓' : k;
+    if (k === 'enter') b.setAttribute('aria-label', 'Set input');
+    else if (k === 'back') b.setAttribute('aria-label', 'Delete last digit');
+    // Don't let a keypad tap move focus off the input — a blur would close the editor.
+    b.addEventListener('pointerdown', (e) => e.preventDefault());
+    b.addEventListener('click', () => fsKeyPress(k));
+    pad.appendChild(b);
+  });
+}
+
 // Build one enlarged-view window node: positioned by its fractional geometry, labelled with
 // its current input-group number, and wired for tap-to-edit. Extracted from renderFullscreen
 // so the live-refresh path can rebuild individual windows WITHOUT disturbing another window
@@ -882,8 +903,13 @@ function createFsWindow(wd) {
   win.querySelector('.fs-win-name').textContent = grp ? (grp.name || '') : 'unassigned';
 
   const input = win.querySelector('.fs-win-input');
+  // On the CTP touchscreen there is no hardware keyboard — the on-screen keypad is the only
+  // way to type, so make the field read-only there to keep the OS keyboard from popping up.
+  // The keypad writes input.value directly, which works regardless of readOnly. On 1080 the
+  // field stays editable so a real keyboard still works alongside the keypad.
+  if (document.body.classList.contains('strip')) input.readOnly = true;
 
-  // Tap/click the window → immediately begin keyboard entry. Disabled while soloed: source
+  // Tap/click the window → begin entry and reveal the keypad. Disabled while soloed: source
   // changes aren't allowed on a fullscreen window (decision), so a tap does nothing there.
   win.addEventListener('click', () => {
     if (fsState && fsState.soloed) return;
@@ -892,11 +918,13 @@ function createFsWindow(wd) {
     input.value = '';
     input.placeholder = grp && grp.number != null ? String(grp.number) : '';
     input.focus();
+    showKeypad();
   });
 
   const commit = async () => {
     const raw = input.value.trim();
     win.classList.remove('editing');
+    hideKeypad();
     if (raw === '') return; // no change
     const num = parseInt(raw, 10);
     if (Number.isNaN(num)) { toast('Enter an input number, then press Enter.', 'err'); return; }
@@ -928,9 +956,14 @@ function createFsWindow(wd) {
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); win.classList.remove('editing'); }
+    else if (e.key === 'Escape') { e.preventDefault(); win.classList.remove('editing'); hideKeypad(); }
   });
-  input.addEventListener('blur', () => { win.classList.remove('editing'); });
+  input.addEventListener('blur', () => {
+    win.classList.remove('editing');
+    // Defer: if the blur is because the operator tapped a DIFFERENT window (which becomes the
+    // new editing field synchronously after this), keep the keypad up rather than flashing it.
+    setTimeout(() => { if (!activeFsInput()) hideKeypad(); }, 0);
+  });
 
   // While soloed, replace the (hidden) input-number chrome with a persistent, centered
   // instruction on how to go back — so the "press and hold to restore" guidance stays on screen
@@ -959,8 +992,8 @@ function createFsWindow(wd) {
 // field being typed into must be left exactly as-is. Rebuilds every OTHER window from fresh
 // data and leaves the editing window's DOM node untouched.
 function updateFullscreenPreservingEdit(widgets, groups, soloed) {
-  const overlay = $('fsOverlay');
-  const editingWin = overlay ? overlay.querySelector('.fs-window.editing') : null;
+  const editor = $('fsEditor');
+  const editingWin = editor ? editor.querySelector('.fs-window.editing') : null;
   const editingUuid = editingWin ? editingWin.dataset.widgetUuid : null;
 
   // If the widget being edited no longer exists in the fresh data, another operator replaced
@@ -972,7 +1005,7 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed) {
   // Adopt the fresh data as the source of truth (commit() and label lookups read fsState).
   fsState = { head: fsState.head, widgets, groups, soloed: !!soloed };
 
-  const stage = $('fsBody').querySelector('.fs-stage');
+  const stage = $('fsStageWrap').querySelector('.fs-stage');
   if (!stage) { renderFullscreen(); return; }
 
   const existing = new Map();
@@ -993,9 +1026,8 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed) {
 // ---- Boot -----------------------------------------------------------------
 
 async function boot() {
-  $('backBtn').addEventListener('click', back);
-  $('restartBtn').addEventListener('click', restart);
-  $('fsClose').addEventListener('click', closeFullscreen);
+  $('homeBtn').addEventListener('click', goHome);
+  buildKeypad();
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
   $('bkBannerX').addEventListener('click', () => {
@@ -1009,6 +1041,7 @@ async function boot() {
     state.panel = await api('/api/panel/me');
     state.showUuids = state.panel.showUuids !== false;
     document.body.classList.toggle('strip', state.panel.layout === 'strip');
+    // Panel identity is shown on the head-picker header.
     $('panelLabel').textContent = state.panel.label || 'Neuron MV Control';
     $('panelSub').textContent = state.panel.ip;
     renderHeads();
@@ -1016,12 +1049,26 @@ async function boot() {
     if ((state.panel.layout || '1080') === '1080') startBkBannerPolling();
   } catch (e) {
     // Show the client IP even when unregistered — the server returns it in the error body,
-    // which is the value to enter in the admin page. Helps troubleshooting.
+    // which is the value an engineer enters in the admin page. Helps troubleshooting.
     const clientIp = e.body && e.body.ip ? e.body.ip : null;
     $('panelSub').textContent = clientIp
       ? `${clientIp} — not registered`
       : 'This panel is not registered.';
-    showEmpty(`${e.message}. Ask an engineer to add this panel’s IP (shown below) in the admin page.`);
+    // Build the empty state so the IP can be shown as its own emphasised line. e.message is
+    // server-originated text, so it goes in via textContent — never HTML.
+    grid.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'empty';
+    const msg = document.createElement('div');
+    msg.textContent = `${e.message}. Ask an engineer to add this panel in the admin page.`;
+    box.appendChild(msg);
+    if (clientIp) {
+      const ip = document.createElement('div');
+      ip.className = 'empty-ip';
+      ip.textContent = `My IP address is: ${clientIp}`;
+      box.appendChild(ip);
+    }
+    grid.appendChild(box);
   }
 }
 // Open the control socket immediately at script load — BEFORE boot() and outside its

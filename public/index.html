@@ -8,38 +8,53 @@
 </head>
 <body>
   <div class="app">
-    <div class="stage">
-      <div class="stage-head">
-        <h2 id="stageTitle">Select a head</h2>
-        <span class="hint" id="stageHint"></span>
-      </div>
-      <div class="grid" id="grid"></div>
-    </div>
-
-    <div class="actionbar">
-      <div class="panelinfo">
-        <div class="panelinfo-main">
-          <span class="panelinfo-label" id="panelLabel">Neuron MV Control</span>
+    <!-- Screen A: pick a head -->
+    <section class="screen screen-heads show" id="screenHeads">
+      <div class="stage">
+        <div class="stage-head">
+          <h2 id="stageTitle">Select a head</h2>
+          <span class="hint" id="stageHint"></span>
+          <div class="grow"></div>
+          <div class="panelinfo">
+            <span class="panelinfo-label" id="panelLabel">Neuron MV Control</span>
+            <span class="panelinfo-sub" id="panelSub">Locating panel…</span>
+          </div>
         </div>
-        <div class="panelinfo-sub" id="panelSub">Locating panel…</div>
+        <div class="grid" id="grid"></div>
       </div>
+    </section>
 
-      <div class="steps" id="steps">
-        <div class="step" data-step="head"><span class="dot">1</span> Head</div>
-        <span class="sep">›</span>
-        <div class="step" data-step="snap"><span class="dot">2</span> Snapshot</div>
-        <span class="sep">›</span>
-        <div class="step" data-step="source"><span class="dot">3</span> Source</div>
-        <span class="sep">›</span>
-        <div class="step" data-step="confirm"><span class="dot">4</span> Confirm</div>
+    <!-- Screen B: unified per-head menu — left: snapshot list (scrolls); right: live editor (fixed) -->
+    <section class="screen screen-menu" id="screenMenu">
+      <div class="menu-left">
+        <div class="menu-left-head">
+          <span class="menu-title" id="menuHeadLabel">Head</span>
+          <div class="grow"></div>
+          <div class="showall-slot" id="showAllSlot"></div>
+        </div>
+        <div class="snap-list" id="snapList"></div>
       </div>
-
-      <div class="grow"></div>
-      <div class="showall-slot" id="showAllSlot"></div>
-      <div class="grow"></div>
-      <button class="btn ghost" id="backBtn" disabled>Back</button>
-      <button class="btn ghost" id="restartBtn">Start over</button>
-    </div>
+      <div class="menu-right">
+        <!-- Slim header: gesture hint + Home. Panel identity lives on the head-picker screen. -->
+        <div class="menu-right-head">
+          <div class="fs-hint" id="fsHint">Tap a window to change its input · press and hold to make it fullscreen</div>
+          <div class="grow"></div>
+          <button class="btn ghost home-btn" id="homeBtn" aria-label="Home">
+            <span class="btn-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.8 12 3l9 7.8"/><path d="M5.5 9.5V21h13V9.5"/></svg></span>
+            <span class="btn-txt">Home</span>
+          </button>
+        </div>
+        <!-- Editor fills the pane edge-to-edge (no padding) so the stage is as large as possible. -->
+        <div class="fs-editor" id="fsEditor">
+          <div class="fs-body" id="fsBody">
+            <div class="fs-stage-wrap" id="fsStageWrap"></div>
+            <!-- On-screen numeric keypad for input-group entry (appears when a window is selected). -->
+            <div class="fs-keypad" id="fsKeypad" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div class="toast fs-toast" id="fsToast"></div>
+      </div>
+    </section>
   </div>
 
   <!-- Confirm overlay -->
@@ -58,18 +73,6 @@
   <div class="bkbanner" id="bkBanner">
     <span class="bkbanner-msg" id="bkBannerMsg"></span>
     <button class="bkbanner-x" id="bkBannerX" aria-label="Dismiss">✕</button>
-  </div>
-
-  <!-- Fullscreen input-group editor (1080 only) -->
-  <div class="fs-overlay" id="fsOverlay">
-    <div class="fs-header">
-      <div class="fs-title" id="fsTitle">Head</div>
-      <div class="fs-hint" id="fsHint">Tap a window to change its input · hold to make it fullscreen</div>
-      <div class="grow"></div>
-      <button class="btn" id="fsClose">Close</button>
-    </div>
-    <div class="fs-body" id="fsBody"></div>
-    <div class="toast fs-toast" id="fsToast"></div>
   </div>
 
   <script src="shared.js"></script>

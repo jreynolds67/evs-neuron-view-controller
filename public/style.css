@@ -38,44 +38,64 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 .mono { font-family: var(--mono); }
 
 /* ---- App shell ---- */
-.app { display: flex; flex-direction: column; height: 100%; }
-.topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
-}
-.topbar .title { font-size: 18px; font-weight: 600; }
-.topbar .sub { color: var(--ink-dim); font-size: 13px; }
-.topbar .spacer { flex: 1; }
-.pill {
-  font-size: 12px; padding: 4px 10px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--ink-dim);
-}
-.pill.ok { color: var(--fire); border-color: color-mix(in srgb, var(--fire) 45%, transparent); }
-.pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.app { height: 100%; }
+.grow { flex: 1; } /* generic spacer used in the screen/menu headers */
 
-/* ---- Breadcrumb / stepper ---- */
-/* Panel identity block, now living in the bottom action bar. */
-.panelinfo { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; min-width: 0; }
-.panelinfo-main { display: flex; align-items: center; gap: 8px; }
+/* Two top-level screens: the head picker (A) and the unified per-head menu (B). */
+.screen { display: none; height: 100%; }
+.screen.show { display: flex; }
+.screen-heads { flex-direction: column; }
+
+/* Panel identity block — head-picker header and the menu's right pane. */
+.panelinfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .panelinfo-label { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panelinfo-sub { color: var(--ink-dim); font-size: 12px; white-space: nowrap; }
 
-/* Stepper, now inline in the action bar. */
-.steps { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.step {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13px; color: var(--ink-faint); white-space: nowrap;
+/* ---- Unified per-head menu (screen B) ----
+   Left pane = scrollable snapshot list; right pane = fixed live input-group editor. */
+.screen-menu { flex-direction: row; }
+.menu-left { flex: 2 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.menu-left-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
 }
-.step .dot {
-  width: 22px; height: 22px; border-radius: 50%;
-  display: grid; place-items: center; font-size: 12px;
-  border: 1px solid var(--line); color: var(--ink-faint);
+.menu-left-head .grow { flex: 1; }
+.menu-title { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snap-list { flex: 1 1 auto; overflow-y: auto; padding: 12px 18px 18px; }
+
+.menu-right {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--line); background: var(--panel); overflow: hidden;
 }
-.step.active { color: var(--ink); }
-.step.active .dot { border-color: var(--accent); color: var(--accent); }
-.step.done .dot { background: var(--accent); border-color: var(--accent); color: #04121c; }
-.steps .sep { color: var(--ink-faint); }
+.menu-right-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+}
+.menu-right-head .grow { flex: 1; }
+.home-btn { min-height: 48px; padding: 0 16px; }
+.home-btn .btn-txt { display: none; }
+.home-btn .btn-ico { display: inline-flex; }
+.home-btn .btn-ico svg { width: 28px; height: 28px; }
+
+.fs-editor { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; position: relative; }
+/* Gesture hint now lives in the slim right-pane header (keeps the editor itself padding-free). */
+.menu-right-head .fs-hint { min-width: 0; color: var(--ink-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Snapshot accordion (left pane) ---- */
+.snap-row { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); margin-bottom: 10px; overflow: hidden; }
+.snap-row-head {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+  padding: 14px 16px; background: transparent; border: none; color: var(--ink); cursor: pointer;
+}
+.snap-row-head:active { background: var(--panel-2); }
+.snap-row-head .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.snap-row-head .k { font-size: 17px; font-weight: 600; }
+.snap-row-head .v { font-size: 12px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snap-row-head .chev { margin-left: auto; color: var(--ink-dim); font-size: 22px; line-height: 1; transition: transform .15s; }
+.snap-row.open .chev { transform: rotate(90deg); }
+.snap-body { display: none; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+.snap-row.open .snap-body { display: block; }
+.snap-previews { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 
 /* ---- Content grid of choices ---- */
 .stage { flex: 1 1 auto; overflow-y: auto; padding: 8px 18px 18px; }
@@ -118,9 +138,36 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 .card .uuid { font-size: 11px; color: var(--ink-faint); }
 
 .empty {
+  grid-column: 1 / -1; /* span all grid columns so the message centers rather than filling one cell */
   padding: 40px; text-align: center; color: var(--ink-dim);
   border: 1px dashed var(--line); border-radius: var(--radius);
 }
+/* The client's own IP, shown in the "not registered" message so an engineer can add it. */
+.empty-ip { margin-top: 14px; font-family: var(--mono); font-size: 16px; color: var(--ink); }
+
+/* Persistent, touch-friendly scrollbar — HEADS PAGE ONLY. The menu's lists keep the default
+   (thin/overlay) bar. overflow-y:scroll keeps the track present even when it isn't scrolling,
+   so the bar is always there to grab. The scroller is .stage on 1080 and the grid on CTP. */
+.screen-heads .stage { overflow-y: scroll; }
+body.strip .screen-heads .stage { overflow-y: hidden; }
+body.strip .screen-heads .head-grid-fixed { overflow-y: scroll; }
+.screen-heads .stage,
+body.strip .screen-heads .head-grid-fixed {
+  scrollbar-width: thin;                              /* Firefox fallback */
+  scrollbar-color: var(--ink-faint) transparent;
+}
+.screen-heads .stage::-webkit-scrollbar,
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar { width: 14px; }
+.screen-heads .stage::-webkit-scrollbar-track,
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-track { background: transparent; }
+.screen-heads .stage::-webkit-scrollbar-thumb,
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb {
+  background: var(--ink-faint); border-radius: 8px;
+  border: 3px solid var(--bg);                        /* insets the thumb inside the 14px track */
+  min-height: 44px;                                   /* easy to grab on a touchscreen */
+}
+.screen-heads .stage::-webkit-scrollbar-thumb:active,
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb:active { background: var(--ink-dim); }
 
 /* "No snapshots available for this head" message inside the snapshot grid. Spans all
    columns (the grid may still carry head-grid-fixed from the heads view) so it reads as a
@@ -164,34 +211,10 @@ body.strip .group-head { padding: 4px 2px 2px; font-size: 11px; }
 .preview-note.stale strong { color: var(--danger); font-size: 12px; }
 .preview-note.stale span { font-size: 10px; color: var(--ink-dim); line-height: 1.3; }
 
-/* ---- Footer action bar ---- */
-.actionbar {
-  flex: 0 0 auto; display: flex; gap: 16px; align-items: center;
-  padding: 12px 18px; background: var(--panel); border-top: 1px solid var(--line);
-  position: relative;
-}
-.actionbar .grow { flex: 1; }
-/* Centered "Show all" slot in the footer. Taken OUT OF FLOW and pinned to the bar's own
-   midpoint: in flow (even flanked by equal .grow spacers) it centers within the gap left
-   between the panel info/stepper and the Back/Start over buttons, which are different
-   widths — so the button sat visibly off-centre. Empty except on the snapshot step. */
-.showall-slot {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  display: flex; align-items: center;
-}
-.showall-btn.on {
-  background: var(--arm); border-color: var(--arm); color: var(--ink);
-}
-.footer-clock {
-  flex: 0 0 auto; font-variant-numeric: tabular-nums; font-family: var(--mono, monospace);
-  font-size: 13px; color: var(--ink-dim); white-space: nowrap; padding-right: 4px;
-}
-body.strip .footer-clock { font-size: 12px; }
-.actionbar .panelinfo + .steps { position: relative; padding-left: 16px; }
-.actionbar .panelinfo + .steps::before {
-  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-  height: 28px; width: 1px; background: var(--line);
-}
+/* ---- "Show all" toggle (lives in the left-pane header) ---- */
+.showall-slot { display: flex; align-items: center; }
+.showall-btn.on { background: var(--arm); border-color: var(--arm); color: var(--ink); }
+
 .btn {
   min-height: 60px; padding: 0 26px; border-radius: var(--radius);
   border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
@@ -205,6 +228,11 @@ body.strip .footer-clock { font-size: 12px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #04121c; }
 .btn.arm { background: var(--arm); border-color: var(--arm); color: #1a0c00; }
 .btn[disabled] { opacity: .4; pointer-events: none; }
+/* Buttons carry both an icon and a text label; the 1080 bar shows the label, the CTP right
+   column shows just the icon (see body.strip rules). */
+.btn-ico { display: none; align-items: center; justify-content: center; }
+.btn-ico svg { width: 26px; height: 26px; display: block; }
+.btn-txt { display: inline; }
 
 /* ---- Confirm overlay ---- */
 .overlay {
@@ -271,9 +299,9 @@ body.strip .sheet .row .btn { min-height: 46px; }
 /* ---- Strip layout: 1835 x 291 ---- */
 /* CTP panels must render at the exact physical panel size regardless of what the embedded
    browser reports for the viewport. Some panels expose a scrollable viewport TALLER than the
-   291px screen; with the default height:100% shell that pushed the action bar (and the
-   centered confirm sheet) below the visible strip. Pin the shell — and the confirm overlay —
-   to a fixed 1835x291 box at the top-left so nothing can drift off-screen or scroll. */
+   291px screen; with the default height:100% shell that pushed content below the visible strip.
+   Pin the shell — and the confirm overlay — to a fixed 1835x291 box at the top-left so nothing
+   can drift off-screen or scroll. */
 body.strip .app {
   position: fixed; top: 0; left: 0;
   width: 1835px; height: 291px;
@@ -283,58 +311,86 @@ body.strip .app {
 body.strip .overlay {
   inset: 0 auto auto 0; width: 1835px; height: 291px;
 }
-/* min-height:0 — flex item default min-height:auto would let the grid refuse to shrink and
-   shove the action bar past the fixed bottom edge; 0 lets the stage scroll internally. */
-body.strip .stage { padding: 6px 12px; min-height: 0; }
-body.strip .stage-head { margin: 2px 0 8px; }
+
+/* Screen A (head picker): compact header + the head grid STRETCHED to fill the full height,
+   so the head windows scale up to use the whole strip instead of leaving dead space below. */
+body.strip .screen-heads .stage { display: flex; flex-direction: column; padding: 6px 12px; min-height: 0; }
+body.strip .stage-head { flex: 0 0 auto; margin: 2px 0 6px; }
 body.strip .stage-head h2 { font-size: 17px; }
 body.strip .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
-body.strip .card { min-height: 58px; padding: 8px 12px; }
+/* Rows share the remaining height (minmax keeps them usable if the wall has many rows → scroll). */
+body.strip .head-grid-fixed { flex: 1 1 auto; min-height: 0; grid-auto-rows: minmax(90px, 1fr); align-content: stretch; overflow-y: auto; }
+body.strip .head-grid-fixed .card { height: 100%; min-height: 0; }
+body.strip .head-grid-fixed .layout-blank { min-height: 0; }
+/* Preview fills the WHOLE cell and the label is overlaid on it, so no card height is lost to a
+   text row — the 16:9 head window is as large as the cell allows. */
+body.strip .head-grid-fixed .card-with-preview { position: relative; }
+body.strip .head-grid-fixed .card-with-preview .card-preview { flex: 1 1 auto; aspect-ratio: auto; min-height: 0; }
+body.strip .head-grid-fixed .card-with-preview .card-body {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
+  padding: 2px 8px; gap: 0; background: linear-gradient(transparent, rgba(4,7,11,0.85));
+}
+body.strip .head-grid-fixed .card-with-preview .card-body .k { font-size: 13px; }
+body.strip .head-grid-fixed .card-with-preview .card-body .uuid { display: none; } /* no room; label suffices */
 body.strip .card .k { font-size: 15px; }
-body.strip .actionbar { padding: 8px 12px; gap: 12px; }
 body.strip .btn { min-height: 48px; font-size: 15px; }
-/* Compact the panel info + stepper so they fit the short bar. */
 body.strip .panelinfo-label { font-size: 13px; }
 body.strip .panelinfo-sub { font-size: 11px; }
-body.strip .steps { gap: 6px; }
-body.strip .step { font-size: 12px; gap: 6px; }
-body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
-/* On the narrowest panels, collapse step labels to just the numbered dots. */
-@media (max-width: 1000px) {
-  body.strip .step { gap: 0; font-size: 0; }
-  body.strip .step .dot { font-size: 11px; }
-}
 
-/* ---- Fullscreen input-group editor ---- */
+/* Screen B (menu): compact the two panes for the short strip. */
+body.strip .menu-left-head { padding: 6px 12px; }
+body.strip .menu-title { font-size: 15px; }
+body.strip .snap-list { padding: 8px 12px 12px; }
+body.strip .snap-row { margin-bottom: 8px; }
+body.strip .snap-row-head { padding: 8px 12px; }
+body.strip .snap-row-head .k { font-size: 15px; }
+body.strip .snap-previews { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+body.strip .menu-right-head { padding: 4px 10px; }
+/* The hint is dropped on the short strip — every pixel of height goes to the stage. */
+body.strip .menu-right-head .fs-hint { display: none; }
+body.strip .home-btn { min-height: 34px; padding: 0 12px; }
+/* On the short strip the editor's stage sits BESIDE the keypad (there isn't the vertical room
+   to stack them). No padding — the stage fills top-to-bottom. */
+body.strip .menu-right .fs-body { flex-direction: row; align-items: stretch; padding: 0; gap: 6px; }
+body.strip .menu-right .fs-keypad { margin: 6px; }
+body.strip .fs-keypad { grid-template-columns: repeat(3, 52px); grid-auto-rows: 42px; gap: 6px; }
+body.strip .fs-key { font-size: 19px; }
+
+/* ---- Input-group editor (right pane) ---- */
 .card-with-preview { position: relative; }
-.expand-btn {
-  position: absolute; top: 6px; right: 6px; z-index: 2;
-  width: 56px; height: 56px; border-radius: 10px;
-  background: rgba(4,7,11,0.7); border: 1px solid var(--line); color: var(--ink);
-  font-size: 28px; line-height: 1; cursor: pointer; display: grid; place-items: center;
-}
-.expand-btn:active { transform: scale(0.94); }
+/* No padding — the stage fills the pane edge-to-edge so it's as large as possible. On 1080 the
+   stage sits on top with the keypad below (tall narrow pane); strip flips to a row (see below). */
+.fs-body { flex: 1 1 auto; padding: 0; display: flex; flex-direction: column; align-items: stretch; gap: 8px; overflow: hidden; min-height: 0; position: relative; }
+/* The keypad gets its own breathing room instead of page padding, so the stage stays flush. */
+.fs-keypad { margin: 8px; }
+/* Holds the 16:9 stage, centered. Shrinks (letting the stage scale down) when the keypad
+   appears alongside it, so no window is ever covered. */
+.fs-stage-wrap { flex: 1 1 auto; min-width: 0; min-height: 0; display: grid; place-items: center; position: relative; container-type: size; }
 
-.fs-overlay {
-  position: fixed; inset: 0; background: var(--bg); z-index: 80;
-  display: none; flex-direction: column;
+/* On-screen numeric keypad, shown only while a window is selected. */
+.fs-keypad {
+  flex: 0 0 auto; align-self: center; display: none;
+  grid-template-columns: repeat(3, 72px); grid-auto-rows: 62px; gap: 10px;
 }
-.fs-overlay.show { display: flex; }
-.fs-header {
-  display: flex; align-items: center; gap: 16px;
-  padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
+.fs-keypad.show { display: grid; }
+.fs-key {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  border-radius: var(--radius); font-size: 26px; font-weight: 600; cursor: pointer;
+  display: grid; place-items: center; line-height: 1; -webkit-tap-highlight-color: transparent;
 }
-.fs-header .fs-title { font-size: 18px; font-weight: 600; }
-.fs-header .fs-hint { color: var(--ink-dim); font-size: 13px; }
-.fs-header .grow { flex: 1; }
-.fs-body { flex: 1; padding: 12px 18px 18px; display: grid; place-items: center; overflow: hidden; min-height: 0; position: relative; }
+.fs-key:active { transform: scale(0.96); }
+.fs-key.enter { background: var(--fire); border-color: var(--fire); color: #04121c; }
+.fs-key.back { color: var(--ink-dim); }
 
-/* 16:9 stage that scales to fit while preserving aspect ratio. Height-bounded so it
-   never runs past the bottom of the screen; width follows from the 16:9 ratio. */
+/* 16:9 stage: the largest 16:9 box that fits its wrap in BOTH dimensions. Height is the
+   smaller of the wrap's height and the height a full-width 16:9 box would need — so it stays
+   inside the wrap whether the wrap is limited by height (short CTP strip) or by width (1080
+   with the keypad shown alongside). Width follows from the aspect ratio. cqh/cqw resolve
+   against the wrap (container-type: size). */
 .fs-stage {
   position: relative; aspect-ratio: 16 / 9;
-  height: 100%; width: auto; max-width: 100%; max-height: 100%;
+  height: min(100cqh, calc(100cqw * 9 / 16)); width: auto;
+  max-width: 100%; max-height: 100%;
   background: #05070b; border: 1px solid var(--line); border-radius: 8px;
   margin: 0 auto;
 }
@@ -363,12 +419,12 @@ body.strip .step .dot { width: 20px; height: 20px; font-size: 11px; }
 /* Soloed (one window blown up to fullscreen): the enlarged view turns GREEN to match the green
    previews, source editing is disabled, and a persistent centered instruction (not a toast)
    shows how to go back. */
-.fs-overlay.soloed .fs-window {
+.fs-editor.soloed .fs-window {
   border-color: var(--fire); border-width: 3px;
   background: var(--pip-fill);
 }
-.fs-overlay.soloed .fs-win-num,
-.fs-overlay.soloed .fs-win-name { display: none; }
+.fs-editor.soloed .fs-win-num,
+.fs-editor.soloed .fs-win-name { display: none; }
 .fs-restore-hint {
   display: flex; flex-direction: column; align-items: center; gap: 10px;
   color: var(--fire); text-align: center; padding: 12px; line-height: 1.2;
