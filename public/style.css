@@ -150,36 +150,27 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 /* The client's own IP, shown in the "not registered" message so an engineer can add it. */
 .empty-ip { margin-top: 14px; font-family: var(--mono); font-size: 16px; color: var(--ink); }
 
-/* Persistent, touch-friendly scrollbar — the heads page and the menu's LEFT (snapshot) list.
-   The right-hand editor pane never scrolls. overflow-y:scroll keeps the track present even when
-   it isn't scrolling, so the bar is always there to grab. The scroller is .stage on 1080, the
-   grid on CTP, and .snap-list on the menu. */
+/* Persistent, touch-friendly scrollbar — the heads page (.stage) and the menu's LEFT snapshot
+   list (.snap-list). The right-hand editor pane never scrolls. overflow-y:scroll keeps the track
+   present even when it isn't scrolling, so the bar is always there to grab. */
 .screen-heads .stage { overflow-y: scroll; }
-body.strip .screen-heads .stage { overflow-y: hidden; }
-body.strip .screen-heads .head-grid-fixed { overflow-y: scroll; }
 .screen-heads .stage,
-body.strip .screen-heads .head-grid-fixed,
 .snap-list {
   scrollbar-width: thin;                              /* Firefox fallback */
   scrollbar-color: var(--ink-faint) transparent;
 }
 .screen-heads .stage::-webkit-scrollbar,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar,
 .snap-list::-webkit-scrollbar { width: 14px; }
 .screen-heads .stage::-webkit-scrollbar-track,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-track,
 .snap-list::-webkit-scrollbar-track { background: transparent; }
 .screen-heads .stage::-webkit-scrollbar-thumb,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb,
 .snap-list::-webkit-scrollbar-thumb {
   background: var(--ink-faint); border-radius: 8px;
-  /* Transparent border + padding-box clip insets the thumb on ANY pane colour (heads use --bg,
-     the snapshot list uses --panel) without a coloured ring. */
+  /* Transparent border + padding-box clip insets the thumb on any pane colour without a ring. */
   border: 3px solid transparent; background-clip: padding-box;
   min-height: 44px;                                   /* easy to grab on a touchscreen */
 }
 .screen-heads .stage::-webkit-scrollbar-thumb:active,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb:active,
 .snap-list::-webkit-scrollbar-thumb:active { background: var(--ink-dim); }
 
 /* "No snapshots available for this head" message inside the snapshot grid. Spans all
@@ -337,26 +328,13 @@ body.strip .overlay {
   inset: 0 auto auto 0; width: 1835px; height: 291px;
 }
 
-/* Screen A (head picker): compact header + the head grid STRETCHED to fill the full height,
-   so the head windows scale up to use the whole strip instead of leaving dead space below. */
-body.strip .screen-heads .stage { display: flex; flex-direction: column; padding: 6px 12px; min-height: 0; }
-body.strip .stage-head { flex: 0 0 auto; margin: 2px 0 6px; }
+/* Screen A (head picker): compact header + the SAME card grid as 1080 — a 16:9 preview with the
+   label in a body below it. Natural card height (each card is "one card high"); the grid scrolls
+   inside .stage when it's taller than the strip. */
+body.strip .stage { padding: 6px 12px; min-height: 0; }
+body.strip .stage-head { margin: 2px 0 8px; }
 body.strip .stage-head h2 { font-size: 17px; }
 body.strip .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
-/* Rows share the remaining height (minmax keeps them usable if the wall has many rows → scroll). */
-body.strip .head-grid-fixed { flex: 1 1 auto; min-height: 0; grid-auto-rows: minmax(90px, 1fr); align-content: stretch; overflow-y: auto; }
-body.strip .head-grid-fixed .card { height: 100%; min-height: 0; }
-body.strip .head-grid-fixed .layout-blank { min-height: 0; }
-/* Preview fills the WHOLE cell and the label is overlaid on it, so no card height is lost to a
-   text row — the 16:9 head window is as large as the cell allows. */
-body.strip .head-grid-fixed .card-with-preview { position: relative; }
-body.strip .head-grid-fixed .card-with-preview .card-preview { flex: 1 1 auto; aspect-ratio: auto; min-height: 0; }
-body.strip .head-grid-fixed .card-with-preview .card-body {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
-  padding: 2px 8px; gap: 0; background: linear-gradient(transparent, rgba(4,7,11,0.85));
-}
-body.strip .head-grid-fixed .card-with-preview .card-body .k { font-size: 13px; }
-body.strip .head-grid-fixed .card-with-preview .card-body .uuid { display: none; } /* no room; label suffices */
 body.strip .card .k { font-size: 15px; }
 body.strip .btn { min-height: 48px; font-size: 15px; }
 body.strip .panelinfo-label { font-size: 13px; }
