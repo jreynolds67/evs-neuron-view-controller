@@ -201,6 +201,18 @@ body.strip .group-head { padding: 4px 2px 2px; font-size: 11px; }
   border-bottom: 1px solid var(--line); display: grid; place-items: center;
 }
 .card-with-preview .card-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+/* Head labels and snapshot source-head names always RESERVE two lines, so every card is a
+   uniform height and a name that wraps onto a second line is fully shown (a longer one is
+   ellipsised at two lines rather than growing the card). Applies to head cards and the
+   snapshot-preview cards alike. */
+.card-with-preview .card-body .k {
+  line-height: 1.25;
+  min-height: 2.5em;                 /* == two lines at the line-height above */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;             /* cap at two lines; ellipsis beyond */
+  overflow: hidden;
+}
 .preview-svg { width: 100%; height: 100%; display: block; }
 .preview-canvas { fill: #05070b; }
 .preview-widget { fill: rgba(255,255,255,0.02); stroke: var(--line); stroke-width: 1; }
