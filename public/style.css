@@ -54,7 +54,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 /* ---- Unified per-head menu (screen B) ----
    Left pane = scrollable snapshot list; right pane = fixed live input-group editor. */
 .screen-menu { flex-direction: row; }
-.menu-left { flex: 2 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* 1080: an even 50/50 split. CTP keeps a wider left (2/3) — see body.strip below. */
+.menu-left { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .menu-left-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
   padding: 12px 18px; border-bottom: 1px solid var(--line);
@@ -357,6 +358,9 @@ body.strip .panelinfo-label { font-size: 13px; }
 body.strip .panelinfo-sub { font-size: 11px; }
 
 /* Screen B (menu): compact the two panes for the short strip. */
+/* CTP keeps a wider left pane (2/3 list, 1/3 editor); only 1080 is an even 50/50 split. */
+body.strip .menu-left { flex: 2 1 0; }
+body.strip .menu-right { flex: 1 1 0; }
 body.strip .menu-left-head { padding: 6px 12px; }
 body.strip .menu-title { font-size: 15px; }
 body.strip .snap-list { padding: 8px 12px 12px; }
