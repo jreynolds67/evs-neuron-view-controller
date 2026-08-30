@@ -61,7 +61,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 }
 .menu-left-head .grow { flex: 1; }
 .menu-title { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.snap-list { flex: 1 1 auto; overflow-y: auto; padding: 12px 18px 18px; }
+.snap-list { flex: 1 1 auto; overflow-y: scroll; padding: 12px 18px 18px; }
 
 .menu-right {
   flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
@@ -146,29 +146,35 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 /* The client's own IP, shown in the "not registered" message so an engineer can add it. */
 .empty-ip { margin-top: 14px; font-family: var(--mono); font-size: 16px; color: var(--ink); }
 
-/* Persistent, touch-friendly scrollbar — HEADS PAGE ONLY. The menu's lists keep the default
-   (thin/overlay) bar. overflow-y:scroll keeps the track present even when it isn't scrolling,
-   so the bar is always there to grab. The scroller is .stage on 1080 and the grid on CTP. */
+/* Persistent, touch-friendly scrollbar — the heads page and the menu's LEFT (snapshot) list.
+   The right-hand editor pane never scrolls. overflow-y:scroll keeps the track present even when
+   it isn't scrolling, so the bar is always there to grab. The scroller is .stage on 1080, the
+   grid on CTP, and .snap-list on the menu. */
 .screen-heads .stage { overflow-y: scroll; }
 body.strip .screen-heads .stage { overflow-y: hidden; }
 body.strip .screen-heads .head-grid-fixed { overflow-y: scroll; }
 .screen-heads .stage,
-body.strip .screen-heads .head-grid-fixed {
+body.strip .screen-heads .head-grid-fixed,
+.snap-list {
   scrollbar-width: thin;                              /* Firefox fallback */
   scrollbar-color: var(--ink-faint) transparent;
 }
 .screen-heads .stage::-webkit-scrollbar,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar { width: 14px; }
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar,
+.snap-list::-webkit-scrollbar { width: 14px; }
 .screen-heads .stage::-webkit-scrollbar-track,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-track { background: transparent; }
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-track,
+.snap-list::-webkit-scrollbar-track { background: transparent; }
 .screen-heads .stage::-webkit-scrollbar-thumb,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb {
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb,
+.snap-list::-webkit-scrollbar-thumb {
   background: var(--ink-faint); border-radius: 8px;
   border: 3px solid var(--bg);                        /* insets the thumb inside the 14px track */
   min-height: 44px;                                   /* easy to grab on a touchscreen */
 }
 .screen-heads .stage::-webkit-scrollbar-thumb:active,
-body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb:active { background: var(--ink-dim); }
+body.strip .screen-heads .head-grid-fixed::-webkit-scrollbar-thumb:active,
+.snap-list::-webkit-scrollbar-thumb:active { background: var(--ink-dim); }
 
 /* "No snapshots available for this head" message inside the snapshot grid. Spans all
    columns (the grid may still carry head-grid-fixed from the heads view) so it reads as a
