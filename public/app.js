@@ -214,8 +214,6 @@ async function renderHeads() {
   state.showAllActive = false; // heads view always starts from the filtered state
   state.snapViaShowAll = false;
   showScreen('head');
-  $('stageTitle').textContent = 'Select a head';
-  $('stageHint').textContent = '';
   grid.innerHTML = '';
 
   const slots = state.panel.grid || [];

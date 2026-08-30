@@ -670,13 +670,13 @@ function reorderHead(pi, from, target, before) {
 }
 
 // ---- Per-panel physical layout editor ------------------------------------
-// Columns are FIXED (7 for 1080, 8 for strip) to preserve the operator-view scaling.
+// Columns are FIXED at 7 (both 1080 and strip) to preserve the operator-view scaling.
 // The admin defines the number of ROWS and drags heads into a row-major grid. Each slot
 // is a head ref or a blank spacer. Stored as panel.layoutGrid = [ slot, ... ] row-major.
 
 // Column count for a given layout value (the panel's `layout` field, "1080" | "strip").
 // The server computes the same mapping for the operator view in /api/panel/me.
-function colsForLayout(layout) { return layout === 'strip' ? 8 : 7; }
+function colsForLayout(layout) { return 7; }
 
 // Re-flow the row-major layoutGrid when the column count changes, keeping every existing
 // placement in its row and column. Growing (7→8) appends a blank cell to each row;

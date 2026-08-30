@@ -54,7 +54,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 /* ---- Unified per-head menu (screen B) ----
    Left pane = scrollable snapshot list; right pane = fixed live input-group editor. */
 .screen-menu { flex-direction: row; }
-/* 1080: an even 50/50 split. CTP keeps a wider left (2/3) — see body.strip below. */
+/* Even 50/50 split on both layouts (1080 and CTP). */
 .menu-left { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); }
 .menu-left-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
@@ -110,7 +110,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
-/* Custom physical-layout grid: a FIXED number of equal columns (7 on 1080, 8 on strip),
+/* Custom physical-layout grid: a FIXED number of equal columns (7 on both 1080 and strip),
    set from the server via --layout-cols. Column width tracks the default flow (same 1fr
    stretch, same 12px/8px gap), so each card is the exact same size as today — this only
    pins the column COUNT and enables placement. Rows are natural height (16:9 preview +
@@ -334,16 +334,16 @@ body.strip .overlay {
 body.strip .stage { padding: 6px 12px; min-height: 0; }
 body.strip .stage-head { margin: 2px 0 8px; }
 body.strip .stage-head h2 { font-size: 17px; }
-body.strip .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+/* Column COUNT comes from --layout-cols (7, same as 1080) via .grid.head-grid-fixed; only the
+   gap is tightened here for the strip. */
+body.strip .grid { gap: 8px; }
 body.strip .card .k { font-size: 15px; }
 body.strip .btn { min-height: 48px; font-size: 15px; }
 body.strip .panelinfo-label { font-size: 13px; }
 body.strip .panelinfo-sub { font-size: 11px; }
 
-/* Screen B (menu): compact the two panes for the short strip. */
-/* CTP keeps a wider left pane (2/3 list, 1/3 editor); only 1080 is an even 50/50 split. */
-body.strip .menu-left { flex: 2 1 0; }
-body.strip .menu-right { flex: 1 1 0; }
+/* Screen B (menu): compact the two panes for the short strip. Split is 50/50 (inherited from
+   the base rules) — same as 1080. */
 body.strip .menu-left-head { padding: 6px 12px; }
 body.strip .menu-title { font-size: 15px; }
 body.strip .snap-list { padding: 8px 12px 12px; }

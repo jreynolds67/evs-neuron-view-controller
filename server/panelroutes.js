@@ -108,7 +108,7 @@ router.get('/me', async (req, res) => {
   if (!panel) {
     return res.status(404).json({ error: 'Panel not registered', ip });
   }
-  const cols = (panel.layout === 'strip') ? 8 : 7;
+  const cols = 7; // heads grid is 7 columns wide on both layouts (1080 and CTP/strip)
 
   // The operator view is driven ENTIRELY by the layout grid (row-major slots). Each slot
   // is either a head (resolved to the data the client needs) or a blank spacer. Heads
