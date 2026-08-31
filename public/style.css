@@ -92,7 +92,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
   padding: 8px 14px; border-bottom: 1px solid var(--line);
 }
-.menu-title { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-title { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fs-editor { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; position: relative; }
 /* Gesture hint sits as a slim line at the top of the editor (1080); hidden on the short CTP strip. */
 .fs-editor .fs-hint { flex: 0 0 auto; color: var(--ink-dim); font-size: 12px; padding: 6px 14px 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -361,7 +361,7 @@ body.strip .btn { min-height: 48px; font-size: 15px; }
 /* Screen B (menu): compact the two panes for the short strip. Split is 50/50 (inherited from
    the base rules) — same as 1080. */
 body.strip .menu-right-head { padding: 4px 12px; }
-body.strip .menu-title { font-size: 14px; }
+body.strip .menu-title { font-size: 17px; }
 body.strip .snap-list { padding: 6px 10px 10px; }
 body.strip .snap-row3 { gap: 6px; margin-bottom: 6px; }
 body.strip .snap-tile { min-height: 44px; padding: 6px 10px; }
