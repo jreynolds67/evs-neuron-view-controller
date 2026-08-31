@@ -61,10 +61,12 @@ async function api(path, opts) {
   return body;
 }
 
-// Toggle between the two screens (head picker / unified menu).
+// Toggle between the two screens (head picker / unified menu). The floating bottom-right item
+// shows the panel name/IP on the head screen and becomes the Home button inside a menu.
 function showScreen(name) {
   $('screenHeads').classList.toggle('show', name === 'head');
   $('screenMenu').classList.toggle('show', name === 'menu');
+  $('floater').classList.toggle('menu', name === 'menu');
 }
 
 // ---- Head/snapshot preview renderer ---------------------------------------
