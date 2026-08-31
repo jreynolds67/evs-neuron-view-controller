@@ -357,10 +357,10 @@ body.strip .floater-panel { padding: 5px 10px; }
 body.strip .floater-panel .panelinfo-label { font-size: 13px; }
 body.strip .floater-panel .panelinfo-sub { font-size: 11px; }
 body.strip .floater.menu .floater-home { min-height: 44px; min-width: 54px; }
-/* CTP: keypad sits to the RIGHT of the stage (shrinking it), with big buttons. margin-right keeps
-   it clear of the Home button in the bottom-right corner. */
+/* CTP: keypad sits to the RIGHT of the stage (shrinking it), with big buttons. It extends to the
+   corner and opens OVER the Home button (z-index above the floater). */
 body.strip .fs-body { flex-direction: row; align-items: stretch; padding: 6px; gap: 6px; }
-body.strip .fs-keypad { grid-template-columns: repeat(3, 78px); grid-auto-rows: 60px; gap: 8px; margin-right: 64px; }
+body.strip .fs-keypad { grid-template-columns: repeat(3, 78px); grid-auto-rows: 60px; gap: 8px; }
 body.strip .fs-key { font-size: 24px; }
 
 /* ---- Input-group editor (right pane) ---- */
@@ -370,9 +370,13 @@ body.strip .fs-key { font-size: 24px; }
    it to the right (see body.strip). */
 .fs-body { flex: 1 1 auto; display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 8px; overflow: hidden; min-width: 0; min-height: 0; }
 .fs-stage-wrap { flex: 1 1 auto; min-width: 0; min-height: 0; display: grid; place-items: center; container-type: size; }
+/* Solid backing board: fills the gaps between keys and, with buildKeypad's pointerdown guard,
+   stops a between-keys tap from closing the editor. z-index sits ABOVE the Home button (z 40)
+   so the keypad opens over it, and below the confirm overlay (z 50). */
 .fs-keypad {
-  flex: 0 0 auto; align-self: center; display: none; position: relative; z-index: 5;
-  grid-template-columns: repeat(3, 76px); grid-auto-rows: 66px; gap: 10px;
+  flex: 0 0 auto; align-self: center; display: none; position: relative; z-index: 45;
+  grid-template-columns: repeat(3, 76px); grid-auto-rows: 66px; gap: 8px;
+  padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
 }
 .fs-keypad.show { display: grid; }
 .fs-key {

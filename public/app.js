@@ -297,7 +297,7 @@ function renderShowAllButton() {
   if (!state.panel || !state.panel.allowShowAll) return;
   const btn = document.createElement('button');
   btn.className = 'btn ghost showall-btn' + (state.showAllActive ? ' on' : '');
-  btn.textContent = state.showAllActive ? 'Showing all — tap to filter' : 'Show all snapshots';
+  btn.textContent = state.showAllActive ? 'Showing all' : 'Show all snapshots';
   btn.addEventListener('click', () => { state.showAllActive = !state.showAllActive; renderMenuList(); });
   slot.appendChild(btn);
 }
@@ -888,6 +888,9 @@ function buildKeypad() {
   const pad = $('fsKeypad');
   if (!pad) return;
   pad.innerHTML = '';
+  // A tap in the GAP between keys lands on the board itself — swallow it so it can't blur the
+  // input (which would close the editor). Buttons still get their click.
+  pad.addEventListener('pointerdown', (e) => e.preventDefault());
   ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'enter'].forEach((k) => {
     const b = document.createElement('button');
     b.type = 'button';
