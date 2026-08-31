@@ -586,12 +586,17 @@ export function indexSnapshotModel(root) {
   return { heads, headWidgets };
 }
 
-// Short-lived cache of fetched snapshot models WITH their parsed index. A saved snapshot is
-// immutable, and the heads/preview calls for one snapshot all arrive within a few seconds of
-// each other, so caching briefly turns N board fetches + walks (one per source head) into a
-// single fetch and a single walk. Entry: { at, root, index: { heads, headWidgets } }.
-const _modelCache = new Map(); // key `${ip}::${uuid}`
-const MODEL_TTL_MS = 30000;
+// Cache of fetched snapshot models WITH their parsed index. A saved snapshot is IMMUTABLE
+// (a re-save gets a new UUID), so this is cached long and never polled — the "load all
+// previews for a head" (contact-sheet) view reads every snapshot's model through here, and
+// wants each to be one board fetch that stays cached and is shared across panels. Two things
+// make that hold: a long TTL, and in-flight coalescing so concurrent misses for the SAME
+// snapshot share ONE fetch (many panels opening the same head; the contact sheet fetching
+// several snapshots at once). Entry: { at, root, index: { heads, headWidgets } }.
+const _modelCache = new Map();    // key `${ip}::${uuid}` -> entry
+const _modelInflight = new Map(); // key -> Promise<entry> (shared by concurrent callers)
+const MODEL_TTL_MS = 30 * 60 * 1000; // immutable models — 30 min
+const MODEL_CACHE_MAX = 512;         // hundreds of snapshots (esp. under "show all")
 
 // model may be { data: "<json string>" } per StorageFilePreview, or already-parsed.
 function parseModelRoot(model) {
@@ -602,19 +607,32 @@ function parseModelRoot(model) {
   return root;
 }
 
+// Bound the cache. Models are immutable so nothing goes stale within the TTL; drop the
+// oldest-inserted entries once we exceed the cap (approximate LRU, adequate for fetch-once use).
+function evictModelCache() {
+  if (_modelCache.size <= MODEL_CACHE_MAX) return;
+  let overflow = _modelCache.size - MODEL_CACHE_MAX;
+  for (const k of _modelCache.keys()) { if (overflow-- <= 0) break; _modelCache.delete(k); }
+}
+
 export async function getSnapshotModelCached(ip, uuid) {
   const key = `${ip}::${uuid}`;
   const hit = _modelCache.get(key);
   if (hit && (Date.now() - hit.at) < MODEL_TTL_MS) return hit;
-  const model = await getSnapshotModel(ip, uuid);
-  const root = parseModelRoot(model);
-  const entry = { at: Date.now(), root, index: indexSnapshotModel(root) };
-  _modelCache.set(key, entry);
-  if (_modelCache.size > 32) {
-    const now = Date.now();
-    for (const [k, v] of _modelCache) if (now - v.at >= MODEL_TTL_MS) _modelCache.delete(k);
-  }
-  return entry;
+  // Coalesce concurrent misses for the SAME snapshot into one board fetch.
+  const pending = _modelInflight.get(key);
+  if (pending) return pending;
+  const p = (async () => {
+    const model = await getSnapshotModel(ip, uuid);
+    const root = parseModelRoot(model);
+    const entry = { at: Date.now(), root, index: indexSnapshotModel(root) };
+    _modelCache.set(key, entry);
+    evictModelCache();
+    return entry;
+  })();
+  _modelInflight.set(key, p);
+  try { return await p; }
+  finally { _modelInflight.delete(key); }
 }
 
 // PARTIAL RESTORE — the only restore this app performs.

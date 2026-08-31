@@ -315,15 +315,27 @@ function showListMsg(cls, msg) {
   list.appendChild(d);
 }
 
-// Left pane: the snapshots permitted to this head, grouped by folder, as compact tiles laid
-// out 3-up. Tapping a tile opens a full-width detail tray below its row (single-open).
-const SNAP_COLS = 3;
-let snapOpen = null;                 // { tile, detail } currently expanded (single-open)
-const snapPreviewCache = new Map();  // snap.uuid -> { parsed, heads, byHead }
+// Left pane: a "contact sheet" of the snapshots permitted to this head. Folder names are area
+// separators; each snapshot name captions a row of its source-head previews, shown directly
+// (no tap-to-expand). Tapping a preview asks to confirm, then loads it.
+//
+// Previews are NOT polled — a saved snapshot's layout is immutable, so each snapshot's previews
+// are fetched once (server caches the model long, shared across panels) and cached client-side.
+// To stay cheap when "Show all" pulls in hundreds of snapshots, previews load LAZILY: the whole
+// folder/snapshot skeleton renders instantly (just names + a sized placeholder), and each
+// snapshot's previews are fetched + drawn only as it scrolls near the viewport (Intersection
+// Observer). So a big head is an instant skeleton that fills in as you scroll, and the board is
+// hit at most once per snapshot you actually look at.
+const snapPreviewCache = new Map(); // snap.uuid -> { parsed, heads, byHead }
+let snapObserver = null;            // lazily fills snapshot groups as they near the viewport
+
+function disconnectSnapObserver() {
+  if (snapObserver) { snapObserver.disconnect(); snapObserver = null; }
+}
 
 async function renderMenuList() {
   const token = bumpNav();
-  snapOpen = null;
+  disconnectSnapObserver();
   snapPreviewCache.clear();
   renderShowAllButton();
   showListMsg('empty', 'Loading snapshots…');
@@ -341,104 +353,84 @@ async function renderMenuList() {
       return showListMsg('empty-note',
         'No snapshots are available for this head. If you expected some, ask an engineer to allow them for this head.');
     }
-    // Folder headers (blank path = "Ungrouped", shown last). Within a folder the snapshots are
-    // chunked into rows of SNAP_COLS; each row is followed by its own (hidden) detail tray, so an
-    // expansion drops in exactly below its row with no grid reflow.
+    // Fill a snapshot group's previews when it comes into view, then stop watching it. rootMargin
+    // preloads a screen or two ahead so small heads feel eager and scrolling stays ahead of the eye.
+    snapObserver = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        snapObserver.unobserve(e.target);
+        fillSnapGroup(e.target);
+      }
+    }, { root: list, rootMargin: '600px 0px' });
+
+    // Folder separators (blank path = "Ungrouped", shown last), each snapshot a captioned group.
     groupSnapshotsByFolder(snapshots).forEach(({ label, snapshots: snaps }) => {
       const header = document.createElement('div');
       header.className = 'group-head';
       header.textContent = label;
       list.appendChild(header);
-      const sorted = snaps.slice().sort(byName);
-      for (let i = 0; i < sorted.length; i += SNAP_COLS) {
-        const row = document.createElement('div');
-        row.className = 'snap-row3';
-        const detail = document.createElement('div');
-        detail.className = 'snap-detail';
-        sorted.slice(i, i + SNAP_COLS).forEach((s) => row.appendChild(snapTile(s, detail)));
-        list.append(row, detail);
-      }
+      snaps.slice().sort(byName).forEach((s) => {
+        const group = snapGroup(s);
+        list.appendChild(group);
+        snapObserver.observe(group);
+      });
     });
   } catch (e) { showListMsg('empty', e.message); }
 }
 
-// One compact snapshot tile. `detail` is the tray shared by its row (opened below the row).
-// The name is the focus; a description (when present) is a small sub-line. No date/time.
-function snapTile(s, detail) {
-  const tile = document.createElement('button');
-  tile.type = 'button';
-  tile.className = 'snap-tile';
-  const name = document.createElement('span');
-  name.className = 'snap-tile-name';
-  name.textContent = s.name;
-  tile.appendChild(name);
-  if (s.description) {
-    const sub = document.createElement('span');
-    sub.className = 'snap-tile-sub';
-    sub.textContent = s.description;
-    tile.appendChild(sub);
-  }
-  tile.addEventListener('click', () => openSnap(s, tile, detail));
-  return tile;
+// A snapshot's skeleton: its name as a caption + a placeholder-sized preview area (so the group
+// reserves real height before loading — otherwise every group would sit at the top at once and
+// the observer would fire for all of them, defeating the lazy load).
+function snapGroup(s) {
+  const group = document.createElement('div');
+  group.className = 'snap-group';
+  group._snap = s; // read back by fillSnapGroup
+  const head = document.createElement('div');
+  head.className = 'snap-group-head';
+  head.textContent = s.name;
+  const previews = document.createElement('div');
+  previews.className = 'snap-previews';
+  previews.innerHTML = '<div class="snap-ph"></div>'; // reserves height until filled
+  group.append(head, previews);
+  return group;
 }
 
-function closeSnap() {
-  if (!snapOpen) return;
-  snapOpen.tile.classList.remove('active');
-  snapOpen.detail.classList.remove('open');
-  snapOpen.detail.innerHTML = '';
-  snapOpen = null;
-}
-
-// Open a snapshot's detail tray (or close it if it's already the open one). Single-open: any
-// other open tray is closed first. Previews are fetched once per snapshot and cached.
-async function openSnap(s, tile, detail) {
-  if (snapOpen && snapOpen.tile === tile) { closeSnap(); return; } // tap the open tile → close
-  closeSnap();
-  snapOpen = { tile, detail };
-  tile.classList.add('active');
-  detail.classList.add('open');
-  detail.innerHTML = '<div class="preview-loading" style="padding:12px">Loading previews…</div>';
-  const token = navSeq; // re-rendering the list bumps navSeq
+async function fillSnapGroup(group) {
+  const s = group._snap;
+  const container = group.querySelector('.snap-previews');
+  const token = navSeq; // re-rendering the list bumps navSeq and detaches this group
   try {
-    const data = await loadSnapPreviews(s);
-    // Bail if the operator navigated away, or switched to a different tile, while this loaded.
-    if (navStale(token) || !snapOpen || snapOpen.tile !== tile) return;
-    renderSnapDetail(detail, s, data);
+    const data = await loadSnapFull(s);
+    if (navStale(token)) return;
+    renderSnapPreviews(container, s, data);
   } catch (e) {
-    if (navStale(token) || !snapOpen || snapOpen.tile !== tile) return;
-    detail.innerHTML = '';
+    if (navStale(token)) return;
+    container.innerHTML = '';
     const n = document.createElement('div');
     n.className = 'preview-note err'; // board-originated text — never HTML-interpolate
     n.textContent = e.message;
-    detail.appendChild(n);
+    container.appendChild(n);
   }
 }
 
-async function loadSnapPreviews(s) {
+// One board read per snapshot (the combined /full endpoint), cached for the life of this list.
+async function loadSnapFull(s) {
   if (snapPreviewCache.has(s.uuid)) return snapPreviewCache.get(s.uuid);
-  // Source heads inside the snapshot, plus a batched request for ALL their layouts.
-  const [{ heads, parsed }, { heads: byHead }] = await Promise.all([
-    api(`/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/heads`),
-    api(`/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/previews`),
-  ]);
-  const data = { parsed, heads, byHead };
+  const data = await api(`/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/full`);
   snapPreviewCache.set(s.uuid, data);
   return data;
 }
 
-function renderSnapDetail(detail, s, { parsed, heads, byHead }) {
-  detail.innerHTML = '';
+function renderSnapPreviews(container, s, { parsed, heads, byHead }) {
+  container.innerHTML = '';
   if (!parsed || !heads.length) {
     // Couldn't read the snapshot's heads — do NOT guess; block loading for safety.
     const n = document.createElement('div');
     n.className = 'preview-note err';
     n.textContent = 'Couldn’t read this snapshot’s heads on the card, so loading is blocked for safety. Try another snapshot, or ask an engineer to check it.';
-    detail.appendChild(n);
+    container.appendChild(n);
     return;
   }
-  const wrap = document.createElement('div');
-  wrap.className = 'snap-previews';
   heads.slice().sort(byName).forEach((h) => {
     const card = document.createElement('button');
     card.className = 'card card-with-preview';
@@ -454,9 +446,8 @@ function renderSnapDetail(detail, s, { parsed, heads, byHead }) {
     card.querySelector('[data-prev]').appendChild(buildPreviewSvg((byHead && byHead[h.uuid]) || []));
     // Tapping a source-head preview asks to confirm, then loads it onto the target head.
     card.addEventListener('click', () => pickForConfirm(s, h));
-    wrap.appendChild(card);
+    container.appendChild(card);
   });
-  detail.appendChild(wrap);
 }
 
 // ---- Confirm + fire -------------------------------------------------------
@@ -529,6 +520,7 @@ async function fire() {
 function goHome() {
   bumpNav();
   stopEditor();
+  disconnectSnapObserver();
   state.head = state.snap = state.srcHead = null;
   state.showAllActive = false;
   clearShowAllButton();

@@ -273,6 +273,27 @@ router.get('/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
   } catch (e) { sendPanelErr(res, e); }
 });
 
+// Diagnostic: when a snapshot yields no named heads, record whether the model blob parsed at
+// all and its top-level shape — so a malformed blob (e.g. a name with unescaped characters) can
+// be told apart from a genuinely head-less snapshot. Shared by /heads and /full.
+function logSnapshotNoHeads(card, snapUuid, root) {
+  let shape = typeof root;
+  try {
+    if (root && typeof root === 'object') {
+      shape = Object.entries(root).map(([k, v]) => {
+        if (Array.isArray(v)) return `${k}[${v.length}]`;
+        if (v && typeof v === 'object') return `${k}{${Object.keys(v).slice(0, 6).join(',')}}`;
+        return `${k}=${String(v).slice(0, 20)}`;
+      }).join(' ');
+    }
+  } catch { shape = 'introspection-failed'; }
+  log({
+    ip: card.ip, method: 'PARSE', path: `/snapshots/${snapUuid}/model`,
+    status: null, ok: false,
+    detail: `no heads extracted; rootType=${typeof root}; keys: ${String(shape).slice(0, 400)}`,
+  });
+}
+
 // The heads stored inside a snapshot (candidates for the partial mapping source).
 router.get('/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) => {
   const r = await resolveCardRequest(req, res);
@@ -282,31 +303,7 @@ router.get('/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) => {
     const modelEntry = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     // The index carries only named heads (unnamed entries aren't selectable).
     const heads = modelEntry.index.heads;
-
-    // Diagnostic: when extraction yields nothing, record whether the model blob parsed at
-    // all, so a failure can be told apart from "parsed fine but no named heads." This is
-    // what distinguishes a board that returned a malformed blob (e.g. a snapshot name with
-    // unescaped characters) from a genuinely head-less snapshot.
-    if (heads.length === 0) {
-      const root = modelEntry.root;
-      let shape = typeof root;
-      try {
-        if (root && typeof root === 'object') {
-          // Top-level keys, and for each key a hint of what's under it, so we can see where
-          // heads actually live in this board's model structure.
-          shape = Object.entries(root).map(([k, v]) => {
-            if (Array.isArray(v)) return `${k}[${v.length}]`;
-            if (v && typeof v === 'object') return `${k}{${Object.keys(v).slice(0, 6).join(',')}}`;
-            return `${k}=${String(v).slice(0, 20)}`;
-          }).join(' ');
-        }
-      } catch { shape = 'introspection-failed'; }
-      log({
-        ip: card.ip, method: 'PARSE', path: `/snapshots/${req.params.snapUuid}/model`,
-        status: null, ok: false,
-        detail: `no heads extracted; rootType=${typeof root}; keys: ${String(shape).slice(0, 400)}`,
-      });
-    }
+    if (heads.length === 0) logSnapshotNoHeads(card, req.params.snapUuid, modelEntry.root);
 
     // Source heads come straight from the snapshot's own model — a partial restore reads the
     // source layout FROM THE SNAPSHOT, never from the live board, so the live heads are
@@ -410,6 +407,24 @@ router.get('/cards/:cardId/snapshots/:snapUuid/previews', async (req, res) => {
     const byHead = {};
     for (const [uuid, widgets] of index.headWidgets) byHead[uuid] = widgets;
     res.json({ heads: byHead });
+  } catch (e) { sendPanelErr(res, e); }
+});
+
+// Combined: a snapshot's source heads (with names) AND all their previews, from the ONE cached
+// snapshot model. The contact-sheet view uses this so each snapshot is a single board read and
+// a single round-trip (instead of the /heads + /previews pair). Models are immutable and cached
+// long (board.js), so a head's whole sheet ends up costing ~one board read per snapshot, ever.
+router.get('/cards/:cardId/snapshots/:snapUuid/full', async (req, res) => {
+  const r = await resolveCardRequest(req, res);
+  if (!r) return;
+  const { card } = r;
+  try {
+    const modelEntry = await getSnapshotModelCached(card.ip, req.params.snapUuid);
+    const { index } = modelEntry;
+    if (index.heads.length === 0) logSnapshotNoHeads(card, req.params.snapUuid, modelEntry.root);
+    const byHead = {};
+    for (const [uuid, widgets] of index.headWidgets) byHead[uuid] = widgets;
+    res.json({ parsed: index.heads.length > 0, heads: index.heads, byHead });
   } catch (e) { sendPanelErr(res, e); }
 });
 
