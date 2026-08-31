@@ -771,15 +771,6 @@ function renderFullscreen() {
   hideKeypad(); // a full redraw only happens when nothing is being edited
   const { widgets } = fsState;
   const soloView = fsIsSoloView(); // see fsIsSoloView: requires the head to really have 1 widget
-
-  // The header hint doubles as the affordance for the press-and-hold gesture, and flips to the
-  // restore instruction while a window is blown up.
-  const hint = $('fsHint');
-  if (hint) {
-    hint.textContent = soloView
-      ? 'Fullscreen — press and hold to restore the layout'
-      : 'Tap a window to change its input · press and hold to make it fullscreen';
-  }
   $('fsEditor').classList.toggle('soloed', soloView);
 
   // 16:9 stage that fills the available space.

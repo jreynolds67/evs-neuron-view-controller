@@ -22,20 +22,18 @@
       <div class="menu-left">
         <div class="snap-list" id="snapList"></div>
       </div>
-      <!-- Right pane: head name + Show-all header, then the editor. Home is the floating item. -->
+      <!-- Right pane: the live editor runs full-height; Show-all + head name sit to its side.
+           The keypad opens as an overlay on top of the editor (it doesn't move the stage). -->
       <div class="menu-right">
-        <div class="menu-right-head">
-          <div class="showall-slot" id="showAllSlot"></div>
-          <div class="grow"></div>
+        <div class="menu-aside">
           <span class="menu-title" id="menuHeadLabel">Head</span>
+          <div class="grow"></div>
+          <div class="showall-slot" id="showAllSlot"></div>
         </div>
         <div class="fs-editor" id="fsEditor">
-          <div class="fs-hint" id="fsHint">Tap a window to change its input · press and hold to make it fullscreen</div>
-          <div class="fs-body" id="fsBody">
-            <div class="fs-stage-wrap" id="fsStageWrap"></div>
-            <!-- On-screen numeric keypad for input-group entry (appears when a window is selected). -->
-            <div class="fs-keypad" id="fsKeypad" aria-hidden="true"></div>
-          </div>
+          <div class="fs-stage-wrap" id="fsStageWrap"></div>
+          <!-- On-screen numeric keypad — overlays the editor when a window is selected. -->
+          <div class="fs-keypad" id="fsKeypad" aria-hidden="true"></div>
         </div>
         <div class="toast fs-toast" id="fsToast"></div>
       </div>
