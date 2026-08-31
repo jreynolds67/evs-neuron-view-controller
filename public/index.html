@@ -18,16 +18,17 @@
 
     <!-- Screen B: unified per-head menu — left: snapshot list (scrolls); right: live editor (fixed) -->
     <section class="screen screen-menu" id="screenMenu">
+      <!-- Left pane is just the snapshot list — no header, so snapshots use the full height. -->
       <div class="menu-left">
-        <div class="menu-left-head">
-          <span class="menu-title" id="menuHeadLabel">Head</span>
-          <div class="showall-slot" id="showAllSlot"></div>
-        </div>
         <div class="snap-list" id="snapList"></div>
       </div>
-      <!-- Editor fills the whole pane (no header) so the stage is as large as possible.
-           Home lives in the floating item (bottom-right, below). -->
+      <!-- Right pane: head name + Show-all header, then the editor. Home is the floating item. -->
       <div class="menu-right">
+        <div class="menu-right-head">
+          <span class="menu-title" id="menuHeadLabel">Head</span>
+          <div class="grow"></div>
+          <div class="showall-slot" id="showAllSlot"></div>
+        </div>
         <div class="fs-editor" id="fsEditor">
           <div class="fs-hint" id="fsHint">Tap a window to change its input · press and hold to make it fullscreen</div>
           <div class="fs-body" id="fsBody">

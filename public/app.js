@@ -363,14 +363,21 @@ async function renderMenuList() {
 }
 
 // One compact snapshot tile. `detail` is the tray shared by its row (opened below the row).
+// The name is the focus; a description (when present) is a small sub-line. No date/time.
 function snapTile(s, detail) {
-  const when = s.timestamp ? new Date(s.timestamp * 1000).toLocaleString() : '';
   const tile = document.createElement('button');
   tile.type = 'button';
   tile.className = 'snap-tile';
-  tile.innerHTML = '<span class="snap-tile-name"></span><span class="snap-tile-sub"></span>';
-  tile.querySelector('.snap-tile-name').textContent = s.name;
-  tile.querySelector('.snap-tile-sub').textContent = [s.description, when].filter(Boolean).join('  ·  ');
+  const name = document.createElement('span');
+  name.className = 'snap-tile-name';
+  name.textContent = s.name;
+  tile.appendChild(name);
+  if (s.description) {
+    const sub = document.createElement('span');
+    sub.className = 'snap-tile-sub';
+    sub.textContent = s.description;
+    tile.appendChild(sub);
+  }
   tile.addEventListener('click', () => openSnap(s, tile, detail));
   return tile;
 }
