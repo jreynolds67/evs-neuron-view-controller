@@ -362,6 +362,10 @@ body.strip .floater.menu .floater-home { min-height: 44px; min-width: 54px; }
 body.strip .fs-body { flex-direction: row; align-items: stretch; padding: 6px; gap: 6px; }
 body.strip .fs-keypad { grid-template-columns: repeat(3, 78px); grid-auto-rows: 60px; gap: 8px; }
 body.strip .fs-key { font-size: 24px; }
+/* Nudge the whole pip display right a touch. */
+body.strip .fs-stage-wrap { transform: translateX(30px); }
+/* Hide Show-all while the keypad is open (a window is being edited). */
+body.strip .menu-right:has(.fs-keypad.show) > .showall-slot { display: none; }
 
 /* ---- Input-group editor (right pane) ---- */
 .card-with-preview { position: relative; }
