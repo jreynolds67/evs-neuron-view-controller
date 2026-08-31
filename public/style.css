@@ -41,6 +41,22 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 .app { height: 100%; position: relative; } /* positioning context for the floating item */
 .grow { flex: 1; } /* generic spacer used in the screen/menu headers */
 
+/* ---- Admin page header (private/admin.html shares this stylesheet) ---- */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.topbar .title { font-size: 18px; font-weight: 600; }
+.topbar .sub { color: var(--ink-dim); font-size: 13px; }
+.topbar .spacer { flex: 1; }
+.pill {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--ink-dim);
+}
+.pill.ok { color: var(--fire); border-color: color-mix(in srgb, var(--fire) 45%, transparent); }
+.pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+
 /* Floating item, bottom-right of the app: panel name/IP on the home screen, Home button in a
    menu. Absolute inside .app so it stays on the fixed 1835x291 box on CTP; z-index sits BELOW
    the confirm overlay (z 50) so the dialog covers it. */
