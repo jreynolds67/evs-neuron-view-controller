@@ -6,6 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeAtomic, makeWriteChain } from './util.js';
+import { setSuspendedIps } from './board.js';
 
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 
@@ -13,7 +14,9 @@ const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 // {
 //   admin: { user, passwordHash },   // server-authoritative; never sent to/accepted from clients
 //   configVersion: 12,               // server-managed optimistic-concurrency token
-//   cards: [ { id: "mv1", label: "MV Card 1", ip: "10.10.60.21" }, ... ],
+//   cards: [ { id: "mv1", label: "MV Card 1", ip: "10.10.60.21", suspended?: true }, ... ],
+//     // suspended (optional, absent = active): keeps the card's config references alive but
+//     // stops ALL communication with it (see board.js setSuspendedIps / pushDerived).
 //   panels: [
 //     {
 //       ip: "10.10.61.11",           // panels are keyed by their fixed source IP
@@ -40,6 +43,15 @@ function defaultConfig() {
 }
 
 let cache = null;
+
+// Push derived state that OTHER modules cache. Right now that's just the set of suspended card
+// IPs handed to board.js, whose choke point enforces "no communication with a suspended card".
+// Called from every path that installs a new `cache` (load, save, targeted update) so a
+// suspend/resume applies the instant the config changes — never a stale board contacted after.
+function pushDerived(cfg) {
+  const ips = new Set((cfg?.cards || []).filter((c) => c && c.suspended === true && c.ip).map((c) => c.ip));
+  setSuspendedIps(ips);
+}
 
 // Whether the config in memory actually came from a real file (or a save), rather than the
 // EMPTY fallback loadConfig() substitutes when the file is missing or unreadable. loadConfig()
@@ -113,6 +125,7 @@ export async function loadConfig() {
     configAuthoritative = false;
     cache = defaultConfig();
   }
+  pushDerived(cache);
   return cache;
 }
 
@@ -186,6 +199,7 @@ async function doSave(next, expectedVersion) {
   await writeAtomic(CONFIG_PATH, JSON.stringify(next, null, 2));
   cache = next;
   configAuthoritative = true; // a saved config is by definition the real one
+  pushDerived(cache);         // apply any suspend/resume the moment the new config lands
   return cache;
 }
 

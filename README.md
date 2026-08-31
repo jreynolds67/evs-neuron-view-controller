@@ -114,7 +114,12 @@ The admin page (`/admin.html`, login-gated) has four tabs:
 - **Setup** — the card definitions (id / label / board IP) with an inline **storage
   readout** per card (used vs. the board-reported capacity — ~500 MB ceiling — amber at 75%,
   red at 90%), per-card reach tests, **sync diagnostics** (the boards' native card-to-card
-  sync config/status, with a manual trigger), and a live board-activity log.
+  sync config/status, with a manual trigger), and a live board-activity log. Each card also has
+  a **Suspend** toggle (next to Remove): suspending a card keeps every reference to it in the
+  config — head assignments, layout slots, snapshot filters — but stops **all** communication
+  with it, so a card can go for maintenance without rebuilding its config. It takes effect on
+  **Save**; operators see a **SUSPENDED** marker over that card's head previews and can't open
+  or act on them, and backups/share-sweep/probes skip the card until it's resumed.
 
 ## The partials-only guarantee
 
@@ -211,7 +216,7 @@ Top-level keys (all siblings):
 | --- | --- |
 | `admin` | `{ user, passwordHash }` — admin login credential (hashed). See below. |
 | `configVersion` | **Server-managed.** Bumped on every save; used to detect two admin sessions saving over each other. Don't hand-edit it. |
-| `cards` | Array of `{ id, label, ip }` — the multiviewer cards. IPs never reach panels. |
+| `cards` | Array of `{ id, label, ip, suspended? }` — the multiviewer cards. IPs never reach panels. `suspended: true` (absent = active) keeps the card's config but stops all communication with it. |
 | `panels` | Array of panel definitions (IP, label, layout, assigned heads, grid, group, `allowShowAll`). |
 | `panelGroups` | Ordered array of group names for the admin panel list. |
 | `headFilters` | Map of `"cardId::headUuid"` → allowed snapshot UUIDs. Empty = all allowed. |

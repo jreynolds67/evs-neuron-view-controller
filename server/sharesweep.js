@@ -27,14 +27,17 @@ const status = { lastRun: null, lastError: null, shared: 0, checked: 0, failed: 
 function resolveTargets(config) {
   const cfg = config.shareSweep || {};
   const list = Array.isArray(cfg.targets) ? cfg.targets : [];
+  // A suspended card is intentionally offline — it's never a sweep target, whether the sweep
+  // covers all cards (empty list) or names it explicitly.
   if (!list.length) {
-    return (config.cards || []).filter((c) => c.ip).map((c) => ({ label: c.label || c.id, ip: c.ip }));
+    return (config.cards || []).filter((c) => c.ip && !c.suspended).map((c) => ({ label: c.label || c.id, ip: c.ip }));
   }
   return list.map((t) => {
     const card = getCardById(config, t);
+    if (card && card.suspended) return null;             // named card is suspended — drop it
     if (card && card.ip) return { label: card.label || card.id, ip: card.ip };
-    return { label: t, ip: t };
-  }).filter((x) => x.ip);
+    return { label: t, ip: t };                          // raw-IP target (no card) — keep
+  }).filter((x) => x && x.ip);
 }
 
 async function sweepOnce() {

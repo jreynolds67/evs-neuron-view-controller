@@ -162,6 +162,17 @@ async function runBackupInternal() {
   const sel = bcfg.cardId || '';
   let ip = null, label = null;
   const card = getCardById(config, sel);
+  // A suspended target is intentionally offline for maintenance — skip its board export (the
+  // local config snapshot above was already written and is kept). The word "suspended" in the
+  // reason is how the scheduler tells this benign skip apart from a real failure, so it does NOT
+  // raise the operator's backup-failure banner.
+  if (card && card.suspended) {
+    status.lastError = `Backup target "${card.label || card.id}" is suspended — board export skipped.`;
+    status.lastTargetLabel = card.label || card.id;
+    status.lastRun = Date.now();
+    status.lastFiles = written.slice();
+    return status;
+  }
   if (card && card.ip) { ip = card.ip; label = card.label || card.id; }
   else if (sel && /\d+\.\d+\.\d+\.\d+/.test(sel)) { ip = sel; label = sel; }
   if (!ip) {
@@ -541,6 +552,11 @@ export function startBackupScheduler() {
       const boardArchive = (result.lastFiles || []).some((f) => f.file && !f.file.endsWith('__config.json'));
       if (boardArchive) {
         status.scheduledFailure = null;
+      } else if (/suspended/i.test(result.lastError || '')) {
+        // The configured target is suspended for maintenance — an intentional state, not a
+        // failure. Clear any prior banner and stay quiet; the config snapshot still ran.
+        status.scheduledFailure = null;
+        console.log(`[backup] scheduled backup skipped — ${result.lastError}`);
       } else {
         const err = result.lastError || 'Backup failed';
         let reason = 'error';

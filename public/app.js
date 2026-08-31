@@ -160,6 +160,15 @@ function buildPreviewSvg(widgets, { w = 320, h = 180 } = {}) {
   return svg;
 }
 
+// The SUSPENDED marker shown over a head whose card is suspended for maintenance. Built as a
+// node (not innerHTML) so it can be dropped straight into a preview slot.
+function suspendedMarker() {
+  const d = document.createElement('div');
+  d.className = 'preview-suspended';
+  d.textContent = 'SUSPENDED';
+  return d;
+}
+
 async function loadPreviewInto(container, url, { quiet = false } = {}) {
   // On the first load, show a placeholder — there's nothing to display yet. On a background
   // refresh (quiet), leave the existing preview visible and only swap it once the new SVG is
@@ -167,6 +176,10 @@ async function loadPreviewInto(container, url, { quiet = false } = {}) {
   if (!quiet) container.innerHTML = '<div class="preview-loading">Loading preview…</div>';
   try {
     const data = await api(url);
+    // The card was suspended (possibly since this tile was first drawn) — show the marker
+    // instead of an empty preview. A full grid re-render from the config-save reload will also
+    // catch this, but a quiet poll landing first shouldn't blank the tile.
+    if (data.suspended === true) { container.replaceChildren(suspendedMarker()); return; }
     const next = document.createDocumentFragment();
     next.appendChild(buildPreviewSvg(data.widgets || []));
     if (data.resolved === false) {
@@ -245,9 +258,9 @@ async function renderHeads() {
       return;
     }
 
-    const h = slot; // { cardId, headUuid, label }
+    const h = slot; // { cardId, headUuid, label, suspended }
     const card = document.createElement('button');
-    card.className = 'card card-with-preview';
+    card.className = 'card card-with-preview' + (h.suspended ? ' card-suspended' : '');
     card.innerHTML = `
       <div class="card-preview" data-prev></div>
       <div class="card-body">
@@ -257,11 +270,21 @@ async function renderHeads() {
     card.querySelector('.k').textContent = h.label || 'Head';
     if (state.showUuids) card.querySelector('.uuid').textContent = h.headUuid;
     else card.querySelector('.uuid').remove();
-    // Tapping a head opens its unified menu (snapshot list + live editor).
-    card.addEventListener('click', () => openMenu(h));
 
     grid.appendChild(card);
     const prevSlot = card.querySelector('[data-prev]');
+
+    // A suspended card is offline for maintenance: its head stays in the grid, but we show a
+    // SUSPENDED marker instead of a live preview, never poll it, and don't open its menu (every
+    // action on it would fail against a card we're deliberately not talking to).
+    if (h.suspended) {
+      prevSlot.appendChild(suspendedMarker());
+      card.addEventListener('click', () => toast('This head’s card is suspended for maintenance.'));
+      return;
+    }
+
+    // Tapping a head opens its unified menu (snapshot list + live editor).
+    card.addEventListener('click', () => openMenu(h));
     const prevUrl = `/api/panel/cards/${h.cardId}/heads/${h.headUuid}/preview`;
     prevSlot.dataset.prevUrl = prevUrl; // remembered so a live board update can refresh it
     loadPreviewInto(prevSlot, prevUrl);

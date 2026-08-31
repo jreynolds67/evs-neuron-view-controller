@@ -8,14 +8,32 @@ function renderCards() {
   const tb = $('cardRows'); tb.innerHTML = '';
   config.cards.forEach((c, i) => {
     const tr = document.createElement('tr');
+    if (c.suspended) tr.className = 'card-suspended-row';
     tr.innerHTML = `
       <td><input value="${esc(c.id || '')}" data-i="${i}" data-f="id"></td>
       <td><input value="${esc(c.label || '')}" data-i="${i}" data-f="label"></td>
       <td><input value="${esc(c.ip || '')}" data-i="${i}" data-f="ip" placeholder="10.10.60.x"></td>
       <td><div class="stor" data-stor="${esc(c.id || '')}"><span class="stor-idle muted">—</span></div></td>
-      <td><button class="btn sm del" data-del="${i}">Remove</button></td>`;
+      <td class="card-actions">
+        <button class="btn sm suspend${c.suspended ? ' on' : ''}" data-susp="${i}"
+          title="${c.suspended ? 'Resume communication with this card on the next Save'
+            : 'Keep this card’s config but stop all communication with it on the next Save'}">${c.suspended ? 'Suspended' : 'Suspend'}</button>
+        <button class="btn sm del" data-del="${i}">Remove</button>
+      </td>`;
     tb.appendChild(tr);
   });
+  // Suspend is a config change like any other — it flips the flag locally and only takes effect
+  // (stops/resumes board communication) when the config is saved. Re-render so the row, button,
+  // and storage cell reflect the new state immediately.
+  tb.querySelectorAll('[data-susp]').forEach((b) => b.addEventListener('click', (e) => {
+    const i = +e.currentTarget.dataset.susp;
+    const nowSuspended = !config.cards[i].suspended;
+    if (nowSuspended) config.cards[i].suspended = true; else delete config.cards[i].suspended;
+    renderCards();
+    toast(nowSuspended
+      ? `"${config.cards[i].label || config.cards[i].id}" will be suspended when you Save config.`
+      : `"${config.cards[i].label || config.cards[i].id}" will resume when you Save config.`);
+  }));
   tb.querySelectorAll('input').forEach((inp) => {
     // Snapshot the id at focus so an id edit can be cascaded from old → new on commit.
     let originalId = inp.dataset.f === 'id' ? inp.value : null;
@@ -74,6 +92,8 @@ async function loadAllStorage() {
     if (!c.id) continue;
     const slot = document.querySelector(`[data-stor="${cssEsc(c.id)}"]`);
     if (!slot) continue;
+    // Suspended cards are intentionally offline — don't probe them (the server refuses anyway).
+    if (c.suspended) { slot.innerHTML = '<span class="stor-idle muted">suspended</span>'; continue; }
     if (!c.ip) { slot.innerHTML = '<span class="stor-idle muted">no IP</span>'; continue; }
     slot.innerHTML = '<span class="stor-idle muted">…</span>';
     try {

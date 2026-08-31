@@ -42,11 +42,34 @@ function portSuffix() {
   return isDefault ? '' : `:${PORT}`;
 }
 
+// --- Suspended cards -------------------------------------------------------
+// A card can be SUSPENDED for maintenance (an admin toggle, applied on config save). A
+// suspended card keeps every reference in the config alive — head assignments, filters,
+// layout slots — but this app stops ALL communication with it while suspended. That guarantee
+// is enforced HERE, at the single choke point every board call passes through, so no route,
+// scheduler, or service can accidentally reach a suspended board even if it forgets to check.
+// config.js owns the policy and pushes the current suspended-IP set via setSuspendedIps() on
+// every load and save, so a suspend/resume takes effect immediately.
+let suspendedIps = new Set();
+export function setSuspendedIps(ips) {
+  suspendedIps = ips instanceof Set ? ips : new Set(ips || []);
+}
+export function isIpSuspended(ip) { return suspendedIps.has(ip); }
+
 function boardBase(ip) {
   return `${SCHEME}://${ip}${portSuffix()}/api/v1`;
 }
 
 async function boardFetch(ip, path, options = {}) {
+  // Hard stop for a suspended card: refuse before opening any socket. Deliberately silent (a
+  // suspended card generates no activity-log noise); callers surface their own context. The
+  // status/code let route layers turn this into a clean "card is suspended" response.
+  if (suspendedIps.has(ip)) {
+    const err = new Error(`Card ${ip} is suspended for maintenance — communication is disabled.`);
+    err.status = 503;
+    err.code = 'CARD_SUSPENDED';
+    throw err;
+  }
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs || API_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), timeoutMs);

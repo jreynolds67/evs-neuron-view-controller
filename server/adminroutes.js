@@ -42,6 +42,22 @@ function sendErr(res, e) {
   res.status(status).json({ error: e.message, code: e.code || null, detail: e.detail || e.body || null });
 }
 
+// A suspended card is intentionally offline for maintenance. The board.js choke point already
+// refuses any traffic to it, but the admin's board-probe endpoints call this first so the page
+// shows a clear "suspended" state instead of a board timeout/error. Returns true (and answers
+// the request) when the card is suspended, in whatever shape the caller opted into: probes that
+// report {ok:false,...} pass shape:'status'; the head/snapshot LIST probes want an error the
+// client surfaces, so they pass the default and get a 409 with code CARD_SUSPENDED.
+function adminCardSuspended(res, card, shape = 'error') {
+  if (!card || card.suspended !== true) return false;
+  if (shape === 'status') {
+    res.json({ ok: false, suspended: true, error: 'Card is suspended for maintenance.' });
+  } else {
+    res.status(409).json({ error: 'Card is suspended for maintenance.', code: 'CARD_SUSPENDED' });
+  }
+  return true;
+}
+
 // --- auth ------------------------------------------------------------------
 
 // Read the admin credential from config. Shape: config.admin = { user, passwordHash }.
@@ -163,6 +179,9 @@ router.put('/config', requireAdmin, async (req, res) => {
   const cardIds = next.cards.map((c) => (c.id || '').trim()).filter(Boolean);
   const dupCard = cardIds.find((id, i) => cardIds.indexOf(id) !== i);
   if (dupCard) return res.status(400).json({ error: `Duplicate card ID: "${dupCard}". Card IDs must be unique.` });
+  // `suspended` is a real boolean or nothing — coerce truthy to `true` and drop it otherwise, so
+  // active cards stay clean in the file and the suspended-IP derivation (config.js) is exact.
+  next.cards.forEach((c) => { if (c.suspended === true) c.suspended = true; else delete c.suspended; });
   const panelIps = next.panels.map((p) => (p.ip || '').trim()).filter(Boolean);
   const dupIp = panelIps.find((ip, i) => panelIps.indexOf(ip) !== i);
   if (dupIp) return res.status(400).json({ error: `Duplicate panel IP: "${dupIp}". Panel IPs must be unique.` });
@@ -257,6 +276,7 @@ router.get('/cards/:cardId/heads', requireAdmin, async (req, res) => {
   const config = await loadConfig();
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card)) return;
   try {
     const heads = await getHeads(card.ip);
     res.json(heads.map((h) => ({ uuid: h.uuid, name: h.name })));
@@ -267,6 +287,7 @@ router.get('/cards/:cardId/snapshots', requireAdmin, async (req, res) => {
   const config = await loadConfig();
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card)) return;
   try {
     const info = await getSnapshotInfo(card.ip);
     // Metadata is inline on the list (see normalizeSnapshotEntry) — no per-item fetch needed.
@@ -284,6 +305,7 @@ router.get('/cards/:cardId/reach', requireAdmin, async (req, res) => {
   const config = await loadConfig();
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card, 'status')) return;
   if (!card.ip) return res.json({ ok: false, ip: null, error: 'No IP set for this card' });
   const started = Date.now();
   try {
@@ -304,6 +326,7 @@ router.get('/cards/:cardId/storage', requireAdmin, async (req, res) => {
   const config = await loadConfig();
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card, 'status')) return;
   if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
   try {
     const info = await getSnapshotInfo(card.ip);
@@ -343,6 +366,7 @@ router.get('/cards/:cardId/sync-diagnostics', requireAdmin, async (req, res) => 
   const config = await loadConfig();
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card, 'status')) return;
   if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
   const out = { ok: true, cardId: card.id, label: card.label || card.id };
 
@@ -387,6 +411,7 @@ router.post('/cards/:cardId/sync-trigger', requireAdmin, async (req, res) => {
   const config = await loadConfig();
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card, 'status')) return;
   if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
   try {
     await triggerStorageSync(card.ip);

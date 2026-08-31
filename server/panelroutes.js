@@ -66,6 +66,22 @@ function panelAuthorizesHead(panel, cardId, headUuid) {
   return !!getPanelHead(panel, cardId, headUuid);
 }
 
+// A suspended card is intentionally offline for maintenance. Every board-touching operator
+// endpoint calls this after resolving the card: if the card is suspended it sends a clean,
+// operator-safe 503 (no board IP — same rule as sendPanelErr) and the handler returns. The
+// board.js choke point is the hard guarantee that no traffic reaches a suspended card; this is
+// the friendly message layered on top so the operator sees "suspended", not a board timeout.
+// (The preview endpoint handles suspension itself, returning an overlay flag rather than an
+// error — so it deliberately does NOT call this.)
+function cardSuspended(res, card) {
+  if (!card || card.suspended !== true) return false;
+  res.status(503).json({
+    error: 'This card is suspended for maintenance. Ask an engineer to resume it.',
+    code: 'CARD_SUSPENDED',
+  });
+  return true;
+}
+
 // Resolve panel + card + assigned head for a panel-facing request, or send an error and
 // return null. Every operator endpoint is scoped to a specific assigned head.
 async function resolveHeadRequest(req, res) {
@@ -115,7 +131,8 @@ router.get('/me', async (req, res) => {
   // whose card was removed, or that don't resolve, become blanks so the grid keeps shape.
   const grid = (panel.layoutGrid || []).map((slot) => {
     if (!slot || slot.type !== 'head') return { type: 'blank' };
-    if (!getCardById(config, slot.cardId)) return { type: 'blank' };
+    const card = getCardById(config, slot.cardId);
+    if (!card) return { type: 'blank' };
     // Resolve against the panel's head assignments. A grid reference with no matching
     // assignment (head was unassigned) becomes a blank so the grid keeps its shape.
     const h = (panel.heads || []).find(
@@ -126,6 +143,9 @@ router.get('/me', async (req, res) => {
       cardId: slot.cardId,
       headUuid: slot.headUuid,
       label: h.label || h.boardName || 'Head',
+      // When the card is suspended the head stays in place (its config is untouched) but the
+      // client shows a SUSPENDED marker instead of a live preview and won't poll or open it.
+      suspended: card.suspended === true,
     };
   });
 
@@ -232,6 +252,7 @@ router.get('/cards/:cardId/heads/:headUuid/snapshots', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
   const { config, panel, card } = r;
+  if (cardSuspended(res, card)) return;
 
   try {
     const info = await getSnapshotInfo(card.ip);
@@ -299,6 +320,7 @@ router.get('/cards/:cardId/snapshots/:snapUuid/heads', async (req, res) => {
   const r = await resolveCardRequest(req, res);
   if (!r) return;
   const { card } = r;
+  if (cardSuspended(res, card)) return;
   try {
     const modelEntry = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     // The index carries only named heads (unnamed entries aren't selectable).
@@ -320,6 +342,10 @@ router.get('/cards/:cardId/heads/:headUuid/preview', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
   const { card } = r;
+  // Suspended: never contact the board. Return an explicit flag (not an error) so the client
+  // renders the SUSPENDED overlay in the tile. This also covers the brief window where a client
+  // is still polling a head whose card was just suspended, before its reload lands.
+  if (card.suspended === true) return res.json({ widgets: [], suspended: true, soloed: false });
   try {
     const key = `${card.ip}::${req.params.headUuid}`;
     const widgets = await previewCache.get(key, () => getHeadWidgets(card.ip, req.params.headUuid));
@@ -348,6 +374,7 @@ router.get('/cards/:cardId/heads/:headUuid/groups', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
   const { card } = r;
+  if (cardSuspended(res, card)) return;
   try {
     // Groups are per-card (not per-head), so key by IP — every head on a card shares one
     // cached result, further cutting board fetches.
@@ -375,6 +402,7 @@ router.post('/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/group', async (r
   const { card } = r;
   const { groupUuid } = req.body || {};
   if (!groupUuid) return res.status(400).json({ error: 'groupUuid is required' });
+  if (cardSuspended(res, card)) return;
   try {
     const result = await setWidgetGroup(card.ip, req.params.headUuid, req.params.widgetUuid, groupUuid);
     // The write changed this head's layout — drop its cached preview so the next poll (and
@@ -389,6 +417,7 @@ router.get('/cards/:cardId/snapshots/:snapUuid/heads/:headUuid/preview', async (
   const r = await resolveCardRequest(req, res);
   if (!r) return;
   const { card } = r;
+  if (cardSuspended(res, card)) return;
   try {
     const { index } = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     const widgets = index.headWidgets.get(req.params.headUuid) || [];
@@ -402,6 +431,7 @@ router.get('/cards/:cardId/snapshots/:snapUuid/previews', async (req, res) => {
   const r = await resolveCardRequest(req, res);
   if (!r) return;
   const { card } = r;
+  if (cardSuspended(res, card)) return;
   try {
     const { index } = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     const byHead = {};
@@ -418,6 +448,7 @@ router.get('/cards/:cardId/snapshots/:snapUuid/full', async (req, res) => {
   const r = await resolveCardRequest(req, res);
   if (!r) return;
   const { card } = r;
+  if (cardSuspended(res, card)) return;
   try {
     const modelEntry = await getSnapshotModelCached(card.ip, req.params.snapUuid);
     const { index } = modelEntry;
@@ -444,6 +475,7 @@ router.post('/cards/:cardId/snapshots/:snapUuid/restore', async (req, res) => {
   }
   const card = getCardById(config, req.params.cardId);
   if (!card) return res.status(404).json({ error: 'That card is no longer available — go back and try again, or ask an engineer.' });
+  if (cardSuspended(res, card)) return;
 
   // Re-check the snapshot is actually permitted for this head before firing.
   // "Show all" bypasses the per-head filter here exactly as it does on the snapshot LIST, and
@@ -511,6 +543,7 @@ router.post('/cards/:cardId/heads/:headUuid/solo', async (req, res) => {
   const { cardId, headUuid } = req.params;
   const { targetWidgetUuid } = req.body || {};
   if (!targetWidgetUuid) return res.status(400).json({ error: 'targetWidgetUuid is required' });
+  if (cardSuspended(res, card)) return;
   try {
     const widgets = await getHeadWidgets(card.ip, headUuid);
     if (!widgets.some((w) => w.uuid === targetWidgetUuid)) {
@@ -573,6 +606,7 @@ router.post('/cards/:cardId/heads/:headUuid/unsolo', async (req, res) => {
   const { cardId, headUuid } = req.params;
   const cap = getSolo(cardId, headUuid);
   if (!cap) return res.json({ ok: true, restored: false }); // nothing soloed — no-op
+  if (cardSuspended(res, card)) return;
   try {
     // Staleness guard: if the survivor widget is gone, the head was recalled/rebuilt externally
     // (e.g. the native GUI). Recreating our captured widgets would DUPLICATE onto the new layout,
