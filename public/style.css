@@ -380,8 +380,8 @@ body.strip .fs-keypad { grid-template-columns: repeat(3, 78px); grid-auto-rows: 
 body.strip .fs-key { font-size: 24px; }
 /* Nudge the whole pip display right a touch. */
 body.strip .fs-stage-wrap { transform: translateX(30px); }
-/* Hide Show-all while the keypad is open (a window is being edited). */
-body.strip .menu-right:has(.fs-keypad.show) > .showall-slot { display: none; }
+/* Hide Show-all while the keypad is open (a window is being edited) — both layouts. */
+.menu-right:has(.fs-keypad.show) > .showall-slot { display: none; }
 
 /* ---- Input-group editor (right pane) ---- */
 .card-with-preview { position: relative; }
