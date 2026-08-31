@@ -359,7 +359,8 @@ function disconnectSnapObserver() {
 async function renderMenuList() {
   const token = bumpNav();
   disconnectSnapObserver();
-  snapPreviewCache.clear();
+  // Note: snapPreviewCache is NOT cleared here — snapshots are immutable, so keeping it warm
+  // (and prewarmed) is what makes entering a head instant.
   renderShowAllButton();
   showListMsg('empty', 'Loading snapshots…');
   try {
@@ -423,7 +424,7 @@ async function fillSnapGroup(group) {
   const container = group.querySelector('.snap-previews');
   const token = navSeq; // re-rendering the list bumps navSeq and detaches this group
   try {
-    const data = await loadSnapFull(s);
+    const data = await loadSnapFull(state.head.cardId, s);
     if (navStale(token)) return;
     renderSnapPreviews(container, s, data);
   } catch (e) {
@@ -436,12 +437,43 @@ async function fillSnapGroup(group) {
   }
 }
 
-// One board read per snapshot (the combined /full endpoint), cached for the life of this list.
-async function loadSnapFull(s) {
+// One board read per snapshot (the combined /full endpoint). Cached for the whole session: a
+// snapshot is immutable, so the same uuid is valid across heads and reloads — and the homepage
+// prewarm fills this cache so entering a head builds its previews instantly.
+async function loadSnapFull(cardId, s) {
   if (snapPreviewCache.has(s.uuid)) return snapPreviewCache.get(s.uuid);
-  const data = await api(`/api/panel/cards/${state.head.cardId}/snapshots/${s.uuid}/full`);
+  const data = await api(`/api/panel/cards/${cardId}/snapshots/${s.uuid}/full`);
   snapPreviewCache.set(s.uuid, data);
   return data;
+}
+
+// Once the homepage is up, quietly fetch every head's snapshot previews so opening a head is
+// instant. Runs once per load; snapshots are immutable, so the caches (client + the server's
+// long-lived model cache) stay valid for the session. Uses each head's FILTERED list (not
+// "show all") to keep it bounded, and a few workers so it doesn't burst the board.
+let prewarmStarted = false;
+async function prewarmPreviews() {
+  if (prewarmStarted || !state.panel) return;
+  prewarmStarted = true;
+  const heads = (state.panel.grid || []).filter((s) => s && s.type === 'head');
+  const jobs = [];
+  const seen = new Set(); // dedupe snapshots shared across heads on the same card
+  for (const h of heads) {
+    try {
+      const { snapshots } = await api(`/api/panel/cards/${h.cardId}/heads/${h.headUuid}/snapshots`);
+      (snapshots || []).forEach((s) => {
+        if (s.uuid && !seen.has(s.uuid)) { seen.add(s.uuid); jobs.push({ cardId: h.cardId, snap: s }); }
+      });
+    } catch { /* a head whose list won't load just isn't prewarmed */ }
+  }
+  let i = 0;
+  const worker = async () => {
+    while (i < jobs.length) {
+      const job = jobs[i++];
+      try { await loadSnapFull(job.cardId, job.snap); } catch { /* skip on failure */ }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
 }
 
 function renderSnapPreviews(container, s, { parsed, heads, byHead }) {
@@ -1098,6 +1130,10 @@ async function boot() {
     renderHeads();
     // Backup-failure banner is a 1080-panel feature only.
     if ((state.panel.layout || '1080') === '1080') startBkBannerPolling();
+    // Warm the snapshot previews in the background so entering a head is instant. Deferred to
+    // idle so the homepage's own live previews load first.
+    if ('requestIdleCallback' in window) requestIdleCallback(() => prewarmPreviews(), { timeout: 3000 });
+    else setTimeout(prewarmPreviews, 1500);
   } catch (e) {
     // Show the client IP even when unregistered — the server returns it in the error body,
     // which is the value an engineer enters in the admin page. Helps troubleshooting.
