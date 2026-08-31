@@ -140,7 +140,12 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
   grid-template-columns: repeat(var(--layout-cols, 7), minmax(0, 1fr));
   grid-auto-rows: max-content;
   align-content: start;
+  /* Clear the floating panel/Home item (bottom-right) so a full scroll doesn't hide the last
+     row's label behind it. Applied to the grid content (reliably scrollable, unlike padding on
+     the scroll container itself on older Chromium). */
+  padding-bottom: 76px;
 }
+body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
 /* A blank cell holds a head's worth of space but renders nothing. It stretches to the
    row's height (set by sibling cards) so multiple blanks read as continuous empty space. */
 .grid.head-grid-fixed .layout-blank {
