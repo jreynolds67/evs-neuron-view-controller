@@ -22,18 +22,17 @@
       <div class="menu-left">
         <div class="snap-list" id="snapList"></div>
       </div>
-      <!-- Right pane: the live editor runs full-height; Show-all + head name sit to its side.
-           The keypad opens as an overlay on top of the editor (it doesn't move the stage). -->
+      <!-- Right pane: the live editor runs full-height, with Show-all overlaid top-left and the
+           head name top-right. The keypad opens to the right of the stage and shrinks it. -->
       <div class="menu-right">
-        <div class="menu-aside">
-          <span class="menu-title" id="menuHeadLabel">Head</span>
-          <div class="grow"></div>
-          <div class="showall-slot" id="showAllSlot"></div>
-        </div>
+        <div class="showall-slot" id="showAllSlot"></div>
+        <span class="menu-title" id="menuHeadLabel">Head</span>
         <div class="fs-editor" id="fsEditor">
-          <div class="fs-stage-wrap" id="fsStageWrap"></div>
-          <!-- On-screen numeric keypad — overlays the editor when a window is selected. -->
-          <div class="fs-keypad" id="fsKeypad" aria-hidden="true"></div>
+          <div class="fs-body" id="fsBody">
+            <div class="fs-stage-wrap" id="fsStageWrap"></div>
+            <!-- On-screen numeric keypad — appears beside the stage when a window is selected. -->
+            <div class="fs-keypad" id="fsKeypad" aria-hidden="true"></div>
+          </div>
         </div>
         <div class="toast fs-toast" id="fsToast"></div>
       </div>
