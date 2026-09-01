@@ -450,6 +450,13 @@ body.strip .fs-stage-wrap { transform: translateX(30px); }
 .fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
 .fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+/* CTP strip (291px tall): the pip is short, so the full-size input number fills the window and
+   pushes the UMD name line out of the clipped area. Shrink the number and tighten spacing on the
+   strip so the name fits under it. */
+body.strip .fs-window { gap: 2px; padding: 3px; }
+body.strip .fs-win-num { font-size: clamp(14px, 2.6vw, 30px); }
+body.strip .fs-win-name,
+body.strip .fs-window.has-umd .fs-win-name { font-size: 11px; line-height: 1.1; }
 /* Inline number entry — hidden until the window is tapped (editing). */
 .fs-win-input {
   display: none; width: 80%; max-width: 160px; text-align: center;
