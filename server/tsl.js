@@ -146,9 +146,19 @@ function resolveSettings(cfg) {
     // input number = display index + indexOffset (Cerebrum usually sends the input number
     // directly, so 0; set 1 if it sends 0-based indices).
     indexOffset: Number.isFinite(Number(t.indexOffset)) ? Number(t.indexOffset) : 0,
-    // A name older than this is treated as stale by the API (source dropped / Cerebrum stopped).
-    staleMs: Number.isFinite(Number(t.staleMs)) ? Number(t.staleMs) : 15000,
+    // TSL is a latch protocol: a received name stays valid until replaced, so names are NEVER
+    // dimmed on their own age (a source may only refresh once per full round-robin, which is
+    // minutes with hundreds of displays). Instead, staleness is a WHOLE-FEED signal: senders like
+    // Cerebrum emit ~1 packet/sec across all displays, so if NOTHING arrives for this long the
+    // feed itself is down (sender stopped / link lost) and every name is dimmed together.
+    feedTimeoutMs: Number.isFinite(Number(t.feedTimeoutMs)) ? Number(t.feedTimeoutMs) : 15000,
   };
+}
+
+// True when the receiver has gone silent long enough that the whole feed is considered down.
+// Never true purely because an individual name is old — see feedTimeoutMs above.
+export function feedDown() {
+  return !stats.lastPacketAt || (Date.now() - stats.lastPacketAt) > resolved.feedTimeoutMs;
 }
 
 let resolved = resolveSettings(null);
@@ -219,12 +229,14 @@ function stopListeners() {
 
 export function stopTsl() { stopListeners(); currentKey = null; }
 
-// Latest UMD entries for a screen, keyed by INPUT NUMBER (index + indexOffset). Each entry
-// carries whether it is stale (no update within staleMs) so the UI can dim a dropped source.
+// Latest UMD entries for a screen, keyed by INPUT NUMBER (index + indexOffset). Names latch, so
+// `stale` reflects the WHOLE FEED being down (not a name's own age) — every entry shares it, so
+// the UI dims them together only when the sender has actually stopped.
 export function getTallyForScreen(screen) {
   const out = {};
   if (screen == null || Number.isNaN(Number(screen))) return out;
   const now = Date.now();
+  const down = feedDown();
   for (const e of store.values()) {
     if (e.screen !== Number(screen)) continue;
     const inputNumber = e.index + resolved.indexOffset;
@@ -233,13 +245,34 @@ export function getTallyForScreen(screen) {
       tally: e.tally,
       brightness: e.brightness,
       ageMs: now - e.updatedAt,
-      stale: now - e.updatedAt > resolved.staleMs,
+      stale: down,
     };
   }
   return out;
 }
 
-// Diagnostics snapshot for the admin page / logs.
+// Diagnostics snapshot for the admin page / logs. Includes a sample of the actual received
+// entries (screen, raw index, resulting input number, text) so an operator can confirm the
+// screen/index mapping lines up with the pip numbers without guessing.
 export function tslStatus() {
-  return { ...stats, indexOffset: resolved.indexOffset, staleMs: resolved.staleMs, entries: store.size };
+  const now = Date.now();
+  const received = [...store.values()]
+    .sort((a, b) => a.screen - b.screen || a.index - b.index)
+    .slice(0, 100)
+    .map((e) => ({
+      screen: e.screen,
+      index: e.index,
+      inputNumber: e.index + resolved.indexOffset,
+      text: e.text,
+      ageMs: now - e.updatedAt,
+    }));
+  return {
+    ...stats,
+    indexOffset: resolved.indexOffset,
+    feedTimeoutMs: resolved.feedTimeoutMs,
+    feedDown: feedDown(),
+    feedAgeMs: stats.lastPacketAt ? now - stats.lastPacketAt : null,
+    entries: store.size,
+    received,
+  };
 }

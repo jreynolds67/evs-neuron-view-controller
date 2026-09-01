@@ -1000,8 +1000,9 @@ function createFsWindow(wd) {
 
   // Under the input number, prefer the live TSL UMD name (from Cerebrum) keyed by this window's
   // input group number; fall back to the board's group name, then "unassigned". The tally colour
-  // (red = on air, green = preview) becomes a subtle top-edge accent bar, and a source that
-  // stopped updating is dimmed so a dropped UMD feed is obvious rather than showing a frozen name.
+  // (red = on air, green = preview) becomes a subtle top-edge accent bar. Names latch (TSL only
+  // re-sends each one every round-robin cycle), so `stale` means the WHOLE feed has gone silent
+  // — the sender stopped — and dims every name together, not one that simply hasn't cycled yet.
   const nameEl = win.querySelector('.fs-win-name');
   const umd = umdForGroup(grp);
   if (umd && umd.text) {

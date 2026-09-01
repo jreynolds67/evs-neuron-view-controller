@@ -421,8 +421,13 @@ this server's IP and the configured port.
   whether it is bound and how many packets/names have arrived. `TSL_*` env vars override the
   saved settings at boot.
 - **Tally colour** (red = on air, amber = next/iso, green = preview) is shown as a thin accent
-  bar on the window. A source that stops updating is dimmed after ~15 s so a dropped feed is
-  obvious rather than showing a frozen name.
+  bar on the window.
+- **Names latch.** TSL is a stateless latch protocol — a received name stays shown until the
+  sender replaces it, so a name is never dimmed just because it hasn't refreshed (with hundreds
+  of displays a sender's round-robin refresh can take minutes). Staleness is instead a *whole-feed*
+  signal: senders like Cerebrum emit ~1 packet/sec across all displays, so if **nothing at all**
+  arrives for `settings.tsl.feedTimeoutMs` (default 15 s) the feed is treated as down and every
+  name dims together. Raise it if your sender's aggregate packet rate is slower than that.
 
 The receiver reads only — it never writes to the boards — and a name is best-effort overlay: if
 no tally is present for an input, the board's group name is shown as before.

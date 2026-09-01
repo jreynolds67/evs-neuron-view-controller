@@ -206,8 +206,34 @@ $('tslStatusBtn').addEventListener('click', async () => {
     if (!s.enabled) { el.textContent = 'Receiver disabled (Save after enabling to start it).'; return; }
     const bound = [s.udpBound && `UDP :${s.port}`, s.tcpBound && `TCP :${s.port}`].filter(Boolean).join(', ') || 'not bound';
     const last = s.lastPacketAt ? `${Math.round((Date.now() - s.lastPacketAt) / 1000)}s ago` : 'never';
-    el.textContent = `${bound} · ${s.packets} packets (last ${last}) · ${s.entries} names cached`
+    // Feed health is whole-feed, not per-name: names latch, so this only flags an actual silence.
+    const health = s.entries === 0 ? '' : (s.feedDown ? ' · ⚠ feed silent' : ' · feed live');
+    const summary = `${bound} · ${s.packets} packets (last ${last}) · ${s.entries} names cached${health}`
       + (s.lastError ? ` · last error: ${s.lastError}` : '');
+    // Show the live entries as a small table so the screen/index → input-number mapping can be
+    // checked against the pip numbers. `text` is source-supplied, so it goes in via textContent.
+    el.textContent = summary;
+    let tbl = $('tslEntries');
+    if (!tbl) { tbl = document.createElement('div'); tbl.id = 'tslEntries'; tbl.style.marginTop = '10px'; el.parentElement.appendChild(tbl); }
+    tbl.innerHTML = '';
+    if (!s.received || !s.received.length) {
+      tbl.innerHTML = '<span class="muted" style="font-size:13px">No UMDs received yet.</span>';
+      return;
+    }
+    const t = document.createElement('table');
+    t.style.cssText = 'margin-top:4px; font-size:13px; width:auto';
+    t.innerHTML = '<thead><tr><th style="width:80px">Screen</th><th style="width:70px">Index</th>'
+      + '<th style="width:90px">Input #</th><th>UMD name</th><th style="width:70px">Age</th></tr></thead>';
+    const body = document.createElement('tbody');
+    s.received.forEach((r) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.screen}</td><td>${r.index}</td><td>${r.inputNumber}</td>`
+        + `<td class="umd-name-cell"></td><td>${Math.round(r.ageMs / 1000)}s</td>`;
+      tr.querySelector('.umd-name-cell').textContent = r.text;
+      body.appendChild(tr);
+    });
+    t.appendChild(body);
+    tbl.appendChild(t);
   } catch (err) {
     el.textContent = `Status check failed: ${err.message}`;
   }
