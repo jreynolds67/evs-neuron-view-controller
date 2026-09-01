@@ -1051,8 +1051,7 @@ async function repointWindow(widgetUuid, target) {
     const cur = (fsState.widgets || []).find((w) => w.uuid === widgetUuid);
     if (cur) cur.groupUuid = target.uuid;
     renderFullscreen();
-    const what = target.number != null ? `input ${target.number}` : `input “${target.name || ''}”`;
-    toast(`Window set to ${what}${target.number != null && target.name ? ' (' + target.name + ')' : ''}`, 'ok');
+    // No success toast — the repointed pip is its own confirmation. Errors still toast (below).
   } catch (e) {
     toast(e.message, 'err');
     if (e.code === 'RECALLED' || e.status === 409) fsRefreshNow();
