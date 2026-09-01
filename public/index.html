@@ -19,8 +19,11 @@
     <!-- Screen B: unified per-head menu — left: snapshot list (scrolls); right: live editor (fixed) -->
     <section class="screen screen-menu" id="screenMenu">
       <!-- Left pane is just the snapshot list — no header, so snapshots use the full height. -->
-      <div class="menu-left">
+      <div class="menu-left" id="menuLeft">
         <div class="snap-list" id="snapList"></div>
+        <!-- Input picker: a scrolling touch list of the card's inputs (number + live UMD name).
+             Overtakes the snapshot list while a window is being edited; tap a row to repoint it. -->
+        <div class="input-picker" id="inputPicker" aria-hidden="true"></div>
       </div>
       <!-- Right pane: the live editor runs full-height, with Show-all overlaid top-left and the
            head name top-right. The keypad opens to the right of the stage and shrinks it. -->

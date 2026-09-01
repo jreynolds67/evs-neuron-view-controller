@@ -199,6 +199,35 @@ body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
 .screen-heads .stage::-webkit-scrollbar-thumb:active,
 .snap-list::-webkit-scrollbar-thumb:active { background: var(--ink-dim); }
 
+/* ---- Input picker -------------------------------------------------------- */
+/* A scrolling touch list that OVERTAKES the snapshot list (.snap-list) while a window is being
+   edited: each row is an input group (number + live UMD name + tally colour), tap to repoint. */
+.input-picker { display: none; flex: 1 1 auto; min-height: 0; overflow-y: scroll;
+  flex-direction: column; gap: 8px; padding: 10px 14px 16px; background: var(--panel);
+  touch-action: pan-y; /* keep scrolling even though rows preventDefault pointerdown */
+  scrollbar-width: thin; scrollbar-color: var(--ink-faint) transparent; }
+.input-picker::-webkit-scrollbar { width: 14px; }
+.input-picker::-webkit-scrollbar-track { background: transparent; }
+.input-picker::-webkit-scrollbar-thumb { background: var(--ink-faint); border-radius: 8px;
+  border: 3px solid transparent; background-clip: padding-box; min-height: 44px; }
+.menu-left.picking .snap-list { display: none; }
+.menu-left.picking .input-picker { display: flex; }
+.ip-row { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+  min-height: 60px; padding: 8px 14px; border-radius: 10px; cursor: pointer;
+  background: var(--panel-2); color: var(--ink); border: 2px solid transparent; }
+.ip-row:active { background: var(--pip-fill-strong); }
+.ip-row.current { border-color: var(--arm); }
+.ip-num { font-size: 26px; font-weight: 700; min-width: 52px; text-align: center; }
+.ip-name { font-size: 16px; color: var(--ink-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ip-row.has-umd .ip-name { color: var(--ink); font-weight: 600; }
+.ip-row.umd-stale .ip-name { color: var(--ink-dim); font-style: italic; opacity: 0.7; }
+/* Compact the rows on the short CTP strip. */
+body.strip .input-picker { padding: 6px 10px 10px; gap: 6px; }
+body.strip .ip-row { min-height: 48px; padding: 6px 10px; gap: 10px; }
+body.strip .ip-num { font-size: 20px; min-width: 40px; }
+body.strip .ip-name { font-size: 14px; }
+
 /* "No snapshots available for this head" message inside the snapshot grid. Spans all
    columns (the grid may still carry head-grid-fixed from the heads view) so it reads as a
    centered message rather than an unpadded fragment jammed into one cell. */

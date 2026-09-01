@@ -696,6 +696,10 @@ function connectControlWs() {
 
 let fsState = null; // { head, widgets, groups, soloed }
 let fsPollTimer = null;
+// The widget UUID currently being edited (a pip was tapped). Tracked independently of the DOM
+// focus/`editing` class so the input picker — which lives in the far LEFT pane — can repoint the
+// right window even after a tap over there moved focus off the keypad field.
+let fsEditingUuid = null;
 // Generation token for the enlarged view. Any operation that changes the head (solo/unsolo)
 // bumps it, so a poll whose fetch STARTED earlier can't land afterwards and repaint stale data
 // over the fresh render — the bug where restoring flashed, then snapped back to the fullscreen
@@ -820,6 +824,8 @@ function stopEditor() {
   stopFullscreenPolling();
   stopTallyPolling();
   hideKeypad();
+  closeInputPicker();
+  fsEditingUuid = null;
   fsState = null;
 }
 
@@ -890,6 +896,7 @@ function startTallyPolling() {
         if (fsState && fsState.head === head) {
           fsState.tally = (res && res.tally) || {};
           applyTallyToWindows();
+          refreshInputPickerTally();
         }
       } catch { /* transient — retry next tick */ }
     }
@@ -1039,6 +1046,123 @@ function buildKeypad() {
   });
 }
 
+// ---- Input picker (scrolling touch list of inputs, with live UMD names) ----
+// An alternative to typing an input number: a scrolling list that overtakes the snapshot-recall
+// area while a window is being edited. Each row shows the input number and its live UMD name (and
+// tally colour); tapping one repoints the window being edited. Opens together with the keypad on
+// a pip tap; either control commits through the same repointWindow() path.
+
+// Close the whole edit interaction: drop the editing highlight, hide the keypad, and hide the
+// picker (restoring the snapshot list). Shared by commit, Escape, blur-away, and teardown.
+function endWindowEdit() {
+  const win = $('fsEditor').querySelector('.fs-window.editing');
+  if (win) win.classList.remove('editing');
+  hideKeypad();
+  closeInputPicker();
+  fsEditingUuid = null;
+}
+
+// Repoint one window to a target input group — the single commit path for BOTH the keypad and the
+// picker. Does the live board edit, reflects it locally so the redraw is instant, and handles the
+// RECALLED conflict from a concurrent recall on another panel.
+async function repointWindow(widgetUuid, target) {
+  if (!fsState || !target) return;
+  try {
+    await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${widgetUuid}/group`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupUuid: target.uuid }),
+    });
+    const cur = (fsState.widgets || []).find((w) => w.uuid === widgetUuid);
+    if (cur) cur.groupUuid = target.uuid;
+    renderFullscreen();
+    const what = target.number != null ? `input ${target.number}` : `input “${target.name || ''}”`;
+    toast(`Window set to ${what}${target.number != null && target.name ? ' (' + target.name + ')' : ''}`, 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+    if (e.code === 'RECALLED' || e.status === 409) fsRefreshNow();
+  }
+}
+
+// Paint one picker row's UMD name from the live tally (fall back to the board group name). The
+// picker deliberately shows NO tally colour — the operator picks a source by name/number here.
+function paintPickerRow(row, g) {
+  const nameEl = row.querySelector('.ip-name');
+  if (!nameEl) return;
+  row.classList.remove('has-umd', 'umd-stale');
+  const umd = (g.number != null && fsState && fsState.tally) ? fsState.tally[g.number] : null;
+  if (umd && umd.text) {
+    nameEl.textContent = umd.text;
+    row.classList.add('has-umd');
+    if (umd.stale) row.classList.add('umd-stale');
+  } else {
+    nameEl.textContent = g.name || '';
+  }
+}
+
+// Build the picker rows from the card's input groups, numerically ordered, marking the window's
+// current input so it can be scrolled into view.
+function buildInputPicker(currentGroupUuid) {
+  const box = $('inputPicker');
+  if (!box || !fsState) return;
+  box.innerHTML = '';
+  const groups = (fsState.groups || []).slice().sort((a, b) => {
+    const an = a.number == null ? Infinity : a.number;
+    const bn = b.number == null ? Infinity : b.number;
+    return an - bn || (a.name || '').localeCompare(b.name || '');
+  });
+  groups.forEach((g) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ip-row' + (g.uuid === currentGroupUuid ? ' current' : '');
+    row.dataset.groupUuid = g.uuid;
+    row.innerHTML = '<span class="ip-num mono"></span><span class="ip-name"></span>';
+    row.querySelector('.ip-num').textContent = g.number != null ? g.number : '—';
+    paintPickerRow(row, g);
+    // Keep focus on the keypad field (mirrors the keypad's own trick) so a row tap doesn't blur
+    // the editor shut. touch-action:pan-y (CSS) keeps the list scrollable despite this.
+    row.addEventListener('pointerdown', (e) => e.preventDefault());
+    row.addEventListener('click', () => {
+      const uuid = fsEditingUuid;
+      endWindowEdit();
+      if (uuid) repointWindow(uuid, g);
+    });
+    box.appendChild(row);
+  });
+}
+
+function openInputPicker(currentGroupUuid) {
+  const box = $('inputPicker');
+  const left = $('menuLeft');
+  if (!box || !left || !fsState) return;
+  buildInputPicker(currentGroupUuid);
+  left.classList.add('picking');
+  box.setAttribute('aria-hidden', 'false');
+  box.scrollTop = 0;
+  const sel = box.querySelector('.ip-row.current');
+  if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: 'center' });
+}
+
+function closeInputPicker() {
+  const box = $('inputPicker');
+  const left = $('menuLeft');
+  if (left) left.classList.remove('picking');
+  if (box) box.setAttribute('aria-hidden', 'true');
+}
+
+function pickerIsOpen() { return !!($('menuLeft') && $('menuLeft').classList.contains('picking')); }
+
+// Refresh the open picker's names/tally in place (no rebuild), so live UMD updates flow through
+// without disturbing the operator's scroll position. Called from the fast tally poll.
+function refreshInputPickerTally() {
+  if (!pickerIsOpen() || !fsState) return;
+  const byUuid = new Map((fsState.groups || []).map((g) => [g.uuid, g]));
+  $('inputPicker').querySelectorAll('.ip-row').forEach((row) => {
+    const g = byUuid.get(row.dataset.groupUuid);
+    if (g) paintPickerRow(row, g);
+  });
+}
+
 // Build one enlarged-view window node: positioned by its fractional geometry, labelled with
 // its current input-group number, and wired for tap-to-edit. Extracted from renderFullscreen
 // so the live-refresh path can rebuild individual windows WITHOUT disturbing another window
@@ -1077,54 +1201,35 @@ function createFsWindow(wd) {
     if (fsState && fsState.soloed) return;
     if (win.classList.contains('editing')) return;
     win.classList.add('editing');
+    fsEditingUuid = wd.uuid;
     input.value = '';
     input.placeholder = grp && grp.number != null ? String(grp.number) : '';
     input.focus();
     showKeypad();
+    openInputPicker(wd.groupUuid); // list of inputs (with UMD) over the snapshot area
   });
 
   const commit = async () => {
     const raw = input.value.trim();
-    win.classList.remove('editing');
-    hideKeypad();
+    endWindowEdit(); // clears editing state, keypad, and the picker
     if (raw === '') return; // no change
     const num = parseInt(raw, 10);
     if (Number.isNaN(num)) { toast('Enter an input number, then press Enter.', 'err'); return; }
     const target = groupByNumber(num);
     if (!target) { toast(`No input group numbered ${num} on this card — check the number and try again.`, 'err'); return; }
-    try {
-      await api(`/api/panel/cards/${fsState.head.cardId}/heads/${fsState.head.headUuid}/widgets/${wd.uuid}/group`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupUuid: target.uuid }),
-      });
-      // Reflect the change in the live model so the immediate re-render shows it — even if a
-      // background poll swapped fsState.widgets for a fresh array while we were editing (in
-      // which case the closed-over `wd` is no longer the object renderFullscreen reads).
-      const cur = (fsState.widgets || []).find((w) => w.uuid === wd.uuid);
-      (cur || wd).groupUuid = target.uuid;
-      renderFullscreen();
-      toast(`Window set to input ${num}${target.name ? ' (' + target.name + ')' : ''}`, 'ok');
-    } catch (e) {
-      // A concurrent recall from another panel is reported by the server as a RECALLED
-      // conflict. Show the clear message in THIS view's toast, then refresh so the operator
-      // sees the current (externally changed) state rather than their rejected edit.
-      toast(e.message, 'err');
-      if (e.code === 'RECALLED' || e.status === 409) {
-        fsRefreshNow();
-      }
-    }
+    await repointWindow(wd.uuid, target);
   };
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); win.classList.remove('editing'); hideKeypad(); }
+    else if (e.key === 'Escape') { e.preventDefault(); endWindowEdit(); }
   });
   input.addEventListener('blur', () => {
     win.classList.remove('editing');
-    // Defer: if the blur is because the operator tapped a DIFFERENT window (which becomes the
-    // new editing field synchronously after this), keep the keypad up rather than flashing it.
-    setTimeout(() => { if (!activeFsInput()) hideKeypad(); }, 0);
+    // Defer: a blur can be the operator tapping a DIFFERENT window (which focuses its own field
+    // synchronously after this) or a picker row (which preventDefaults, so no blur fires at all).
+    // Only tear the editor down when focus truly left everything.
+    setTimeout(() => { if (!activeFsInput()) endWindowEdit(); }, 0);
   });
 
   // While soloed, replace the (hidden) input-number chrome with a persistent, centered
