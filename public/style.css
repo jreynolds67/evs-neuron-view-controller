@@ -475,8 +475,6 @@ body.strip .fs-cancel:active { transform: translateY(-50%) scale(0.96); }
 }
 .fs-window:active { background: var(--pip-fill-strong); }
 .fs-window.editing { background: var(--pip-fill); border-color: var(--arm); }
-/* Live hardware-keyboard entry: the typed number shows in the selected pip, in the edit colour. */
-.fs-window.typing .fs-win-num { color: var(--arm); }
 .fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
 .fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -487,6 +485,20 @@ body.strip .fs-window { gap: 2px; padding: 3px; }
 body.strip .fs-win-num { font-size: clamp(14px, 2.6vw, 30px); }
 body.strip .fs-win-name,
 body.strip .fs-window.has-umd .fs-win-name { font-size: 11px; line-height: 1.1; }
+/* Keyboard entry field — hidden until the pip is selected (editing), then it replaces the number.
+   No on-screen keypad: an operator with a keyboard types here and presses Enter. */
+.fs-win-input {
+  display: none; width: 80%; max-width: 160px; text-align: center;
+  font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--arm);
+  border-radius: 6px; padding: 2px 4px;
+}
+.fs-window.editing .fs-win-num { display: none; }
+.fs-window.editing .fs-win-input { display: block; }
+/* The CTP strip has no keyboard — never show the entry field there; keep the number visible and
+   let the operator pick from the input list instead. */
+body.strip .fs-window.editing .fs-win-num { display: block; }
+body.strip .fs-win-input { display: none !important; }
 /* --- TSL UMD name (from Cerebrum) under the input number ------------------- */
 /* When a live UMD name is present it replaces the dim board group-name line and reads brighter,
    since it's the operator-facing source name. A stale feed (no update recently) dims and

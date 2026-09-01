@@ -700,9 +700,10 @@ let fsPollTimer = null;
 // focus/`editing` class so the input picker — which lives in the far LEFT pane — can repoint the
 // right window even after a tap over there moved focus off the keypad field.
 let fsEditingUuid = null;
-// Digits typed on a hardware keyboard while a pip is selected (stations that have a keyboard —
-// there's no on-screen keypad anymore). Shown live in the selected pip; Enter commits, Esc cancels.
-let fsTypeBuffer = '';
+// Pending "tear down the editor after focus left" timer (see the input blur handler). Held at
+// module scope so that tapping straight from one pip to another can CANCEL it — otherwise the
+// hand-off between the two taps would close the editor before the new one opens.
+let fsEditTeardownTimer = null;
 // Generation token for the enlarged view. Any operation that changes the head (solo/unsolo)
 // bumps it, so a poll whose fetch STARTED earlier can't land afterwards and repaint stale data
 // over the fresh render — the bug where restoring flashed, then snapped back to the fullscreen
@@ -1012,53 +1013,12 @@ async function unsoloWindow() {
 function showFsCancel() { const b = $('fsCancel'); if (b) b.hidden = false; }
 function hideFsCancel() { const b = $('fsCancel'); if (b) b.hidden = true; }
 
-// ---- Hardware-keyboard entry ----------------------------------------------
-// Stations with a keyboard can type an input number while a pip is selected — no on-screen keypad.
-// A single document-level handler drives whichever pip is selected (fsEditingUuid); the digits
-// show live in that pip, Enter commits, Backspace edits, Escape cancels.
-
-// Reflect the typed buffer in the selected pip's number (or restore its real number when empty).
-function renderTypedBuffer() {
-  const win = $('fsEditor') && $('fsEditor').querySelector('.fs-window.editing');
-  if (!win) return;
-  const numEl = win.querySelector('.fs-win-num');
-  if (!numEl) return;
-  if (fsTypeBuffer !== '') {
-    win.classList.add('typing');
-    numEl.textContent = fsTypeBuffer;
-  } else {
-    win.classList.remove('typing');
-    const wd = ((fsState && fsState.widgets) || []).find((w) => w.uuid === fsEditingUuid);
-    const grp = wd ? groupByUuid(wd.groupUuid) : null;
-    numEl.textContent = grp ? (grp.number != null ? String(grp.number) : (grp.name || '—')) : '—';
-  }
-}
-
-// Resolve the typed number to an input group and repoint the selected pip.
-function commitTypedInput() {
-  const uuid = fsEditingUuid;
-  const raw = fsTypeBuffer.trim();
-  if (raw === '') { endWindowEdit(); return; } // nothing typed → just close
-  const num = parseInt(raw, 10);
-  const target = Number.isNaN(num) ? null : groupByNumber(num);
-  if (!target) {
-    toast(`No input group numbered ${raw} on this card — check the number and try again.`, 'err');
-    fsTypeBuffer = ''; renderTypedBuffer();
-    return;
-  }
-  endWindowEdit();
-  if (uuid) repointWindow(uuid, target);
-}
-
-function onFsTypeKey(e) {
-  if (!fsEditingUuid || (fsState && fsState.soloed)) return;
-  if (e.ctrlKey || e.metaKey || e.altKey) return; // leave browser/OS shortcuts alone
-  const t = e.target;
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-  if (e.key === 'Enter') { e.preventDefault(); commitTypedInput(); }
-  else if (e.key === 'Escape') { e.preventDefault(); endWindowEdit(); }
-  else if (e.key === 'Backspace') { e.preventDefault(); fsTypeBuffer = fsTypeBuffer.slice(0, -1); renderTypedBuffer(); }
-  else if (/^[0-9]$/.test(e.key) && fsTypeBuffer.length < 4) { fsTypeBuffer += e.key; renderTypedBuffer(); }
+// ---- Keyboard entry field -------------------------------------------------
+// Stations with a keyboard type an input number into a small field that appears in the selected
+// pip (no on-screen keypad). Returns the field of the pip currently being edited, or null.
+function activeFsInput() {
+  const win = $('fsEditor').querySelector('.fs-window.editing');
+  return win ? win.querySelector('.fs-win-input') : null;
 }
 
 // ---- Input picker (scrolling touch list of inputs, with live UMD names) ----
@@ -1069,12 +1029,12 @@ function onFsTypeKey(e) {
 // Close the whole edit interaction: drop the editing highlight, hide the picker (restoring the
 // snapshot list) and the Cancel button. Shared by commit, the Cancel button, and teardown.
 function endWindowEdit() {
+  if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
   const win = $('fsEditor').querySelector('.fs-window.editing');
-  if (win) { win.classList.remove('editing'); win.classList.remove('typing'); }
+  if (win) win.classList.remove('editing');
   closeInputPicker();
   hideFsCancel();
   fsEditingUuid = null;
-  fsTypeBuffer = '';
 }
 
 // Repoint one window to a target input group — the single commit path for BOTH the keypad and the
@@ -1201,21 +1161,59 @@ function createFsWindow(wd) {
     : '—';
   win.innerHTML = `
       <span class="fs-win-num"></span>
+      <input class="fs-win-input mono" inputmode="numeric" maxlength="4" />
       <span class="fs-win-name"></span>`;
   win.querySelector('.fs-win-num').textContent = label;
   paintFsWindowTally(win, wd);
 
-  // Tap/click the window → select it and open the input picker (over the snapshot area). Disabled
-  // while soloed: source changes aren't allowed on a fullscreen window (decision), so a tap does
-  // nothing there. Tapping straight from another pip just moves the selection (no teardown flicker).
+  const input = win.querySelector('.fs-win-input');
+  // The CTP touchscreen has no keyboard — the input picker is the entry method there, so make the
+  // field read-only (and it stays hidden on the strip via CSS). On 1080 keyboard stations the
+  // field is editable so an operator can type the input number and press Enter.
+  if (document.body.classList.contains('strip')) input.readOnly = true;
+
+  // Tap/click the window → select it, reveal the keyboard entry field, and open the input picker
+  // (over the snapshot area). Disabled while soloed. Tapping straight from another pip just moves
+  // the selection (its pending teardown is cancelled), no flicker.
   win.addEventListener('click', () => {
     if (fsState && fsState.soloed) return;
     if (win.classList.contains('editing')) return;
-    document.querySelectorAll('.fs-window.editing').forEach((w) => { w.classList.remove('editing'); w.classList.remove('typing'); });
+    if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
+    document.querySelectorAll('.fs-window.editing').forEach((w) => w.classList.remove('editing'));
     win.classList.add('editing');
     fsEditingUuid = wd.uuid;
-    fsTypeBuffer = ''; // fresh keyboard entry for this pip
+    input.value = '';
+    input.placeholder = grp && grp.number != null ? String(grp.number) : '';
+    input.focus();
     openInputPicker(wd.groupUuid);
+  });
+
+  const commit = async () => {
+    const raw = input.value.trim();
+    const uuid = wd.uuid;
+    endWindowEdit();
+    if (raw === '') return; // no change
+    const num = parseInt(raw, 10);
+    if (Number.isNaN(num)) { toast('Enter an input number, then press Enter.', 'err'); return; }
+    const target = groupByNumber(num);
+    if (!target) { toast(`No input group numbered ${num} on this card — check the number and try again.`, 'err'); return; }
+    await repointWindow(uuid, target);
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); endWindowEdit(); }
+  });
+  input.addEventListener('blur', () => {
+    win.classList.remove('editing');
+    // Defer teardown: a blur can be the operator tapping a DIFFERENT pip (whose click cancels this
+    // timer and re-targets) or a picker row (which preventDefaults, so no blur fires). Only tear
+    // down when focus truly left everything.
+    if (fsEditTeardownTimer) clearTimeout(fsEditTeardownTimer);
+    fsEditTeardownTimer = setTimeout(() => {
+      fsEditTeardownTimer = null;
+      if (!activeFsInput()) endWindowEdit();
+    }, 0);
   });
 
   // While soloed, replace the (hidden) input-number chrome with a persistent, centered
@@ -1281,8 +1279,6 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed, tally) {
 async function boot() {
   $('homeBtn').addEventListener('click', goHome);
   $('fsCancel').addEventListener('click', endWindowEdit);
-  document.addEventListener('keydown', onFsTypeKey); // hardware-keyboard input entry
-
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
   $('bkBannerX').addEventListener('click', () => {
