@@ -745,6 +745,7 @@ async function openEditor(head) {
     fsState = { head, ...(await fetchFsData(head)) };
     renderFullscreen();
     startFullscreenPolling(); // keep the editor live to recalls from other panels
+    startTallyPolling();      // fast, board-free tally refresh (~1s) so UMD names update promptly
   } catch (e) {
     // Board-originated text can reach e.message — never interpolate it into HTML.
     const n = document.createElement('div');
@@ -817,6 +818,7 @@ async function fsRefreshNow() {
 // by renderHeads(), which goHome() calls right after.
 function stopEditor() {
   stopFullscreenPolling();
+  stopTallyPolling();
   hideKeypad();
   fsState = null;
 }
@@ -833,6 +835,69 @@ function umdForGroup(grp) {
   if (!grp || grp.number == null || !fsState || !fsState.tally) return null;
   return fsState.tally[grp.number] || null;
 }
+
+// Paint the line under the input number + the tally border on ONE window, from the current
+// fsState.tally. Prefer the live TSL UMD name (from Cerebrum) keyed by this window's input group
+// number; fall back to the board's group name, then "unassigned". Tally colour (red = on air,
+// etc.) becomes the window border. Names latch (TSL re-sends each only once per round-robin), so
+// `stale` means the WHOLE feed went silent — every name dims together, not one that hasn't cycled.
+// Shared by the initial build (createFsWindow) and the fast tally poll so the two can't drift.
+function paintFsWindowTally(win, wd) {
+  const nameEl = win.querySelector('.fs-win-name');
+  if (!nameEl) return;
+  const grp = groupByUuid(wd.groupUuid);
+  win.classList.remove('has-umd', 'umd-stale', 'tally-red', 'tally-amber', 'tally-green');
+  const umd = umdForGroup(grp);
+  if (umd && umd.text) {
+    nameEl.textContent = umd.text;
+    win.classList.add('has-umd');
+    if (umd.stale) win.classList.add('umd-stale');
+    const t = umd.tally || {};
+    const colour = [t.left, t.right, t.text].find((c) => c && c !== 'off');
+    if (colour) win.classList.add(`tally-${colour}`);
+  } else {
+    nameEl.textContent = grp ? (grp.name || '') : 'unassigned';
+  }
+}
+
+// Repaint every window's UMD name/border in place from fsState.tally, WITHOUT rebuilding the DOM
+// (so an in-progress edit and the window structure are untouched). Skips the window being edited
+// and the soloed view (which shows no names).
+function applyTallyToWindows() {
+  const editor = $('fsEditor');
+  if (!editor || !fsState || fsState.soloed) return;
+  const byUuid = new Map((fsState.widgets || []).map((w) => [w.uuid, w]));
+  editor.querySelectorAll('.fs-window').forEach((win) => {
+    if (win.classList.contains('editing')) return;
+    const wd = byUuid.get(win.dataset.widgetUuid);
+    if (wd) paintFsWindowTally(win, wd);
+  });
+}
+
+// Fast, cheap poll for JUST the tally (an in-memory server read — no board round-trip), so a
+// tally change shows within ~1s instead of waiting for the 5–7s board preview poll. Repaints
+// names/borders in place; the heavy poll still owns widgets/groups/preview.
+let fsTallyTimer = null;
+const TALLY_POLL_MS = 1000;
+function startTallyPolling() {
+  stopTallyPolling();
+  const tick = async () => {
+    if (!fsState) { stopTallyPolling(); return; }
+    if (!document.hidden) {
+      const head = fsState.head;
+      try {
+        const res = await api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/tally`);
+        if (fsState && fsState.head === head) {
+          fsState.tally = (res && res.tally) || {};
+          applyTallyToWindows();
+        }
+      } catch { /* transient — retry next tick */ }
+    }
+    if (fsState) fsTallyTimer = setTimeout(tick, TALLY_POLL_MS);
+  };
+  fsTallyTimer = setTimeout(tick, TALLY_POLL_MS);
+}
+function stopTallyPolling() { if (fsTallyTimer) { clearTimeout(fsTallyTimer); fsTallyTimer = null; } }
 
 function renderFullscreen() {
   const body = $('fsStageWrap');
@@ -997,24 +1062,7 @@ function createFsWindow(wd) {
       <input class="fs-win-input mono" inputmode="numeric" maxlength="4" />
       <span class="fs-win-name"></span>`;
   win.querySelector('.fs-win-num').textContent = label;
-
-  // Under the input number, prefer the live TSL UMD name (from Cerebrum) keyed by this window's
-  // input group number; fall back to the board's group name, then "unassigned". The tally colour
-  // (red = on air, green = preview) becomes a subtle top-edge accent bar. Names latch (TSL only
-  // re-sends each one every round-robin cycle), so `stale` means the WHOLE feed has gone silent
-  // — the sender stopped — and dims every name together, not one that simply hasn't cycled yet.
-  const nameEl = win.querySelector('.fs-win-name');
-  const umd = umdForGroup(grp);
-  if (umd && umd.text) {
-    nameEl.textContent = umd.text;
-    win.classList.add('has-umd');
-    if (umd.stale) win.classList.add('umd-stale');
-    const t = umd.tally || {};
-    const colour = [t.left, t.right, t.text].find((c) => c && c !== 'off');
-    if (colour) win.classList.add(`tally-${colour}`);
-  } else {
-    nameEl.textContent = grp ? (grp.name || '') : 'unassigned';
-  }
+  paintFsWindowTally(win, wd);
 
   const input = win.querySelector('.fs-win-input');
   // On the CTP touchscreen there is no hardware keyboard — the on-screen keypad is the only
