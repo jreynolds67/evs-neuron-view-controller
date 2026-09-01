@@ -700,10 +700,6 @@ let fsPollTimer = null;
 // focus/`editing` class so the input picker — which lives in the far LEFT pane — can repoint the
 // right window even after a tap over there moved focus off the keypad field.
 let fsEditingUuid = null;
-// Pending "tear down the editor after focus left" timer (see the input blur handler). Held at
-// module scope so that tapping straight from one pip to another can CANCEL it — otherwise the
-// brief keypad hide/re-show between the two taps reflows the stage mid-press.
-let fsEditTeardownTimer = null;
 // Generation token for the enlarged view. Any operation that changes the head (solo/unsolo)
 // bumps it, so a poll whose fetch STARTED earlier can't land afterwards and repaint stale data
 // over the fresh render — the bug where restoring flashed, then snapped back to the fullscreen
@@ -746,7 +742,7 @@ async function fetchFsData(head) {
 // Load the right-pane live editor for a head. Called when the menu opens (and re-used by the
 // polling/refresh paths). The editor is always visible on the menu screen — no overlay.
 async function openEditor(head) {
-  hideKeypad(); // any prior selection is gone once we (re)open the editor
+  endWindowEdit(); // any prior selection/picker is gone once we (re)open the editor
   $('fsStageWrap').innerHTML = '<div class="preview-loading" style="padding:40px">Loading windows…</div>';
 
   try {
@@ -827,10 +823,7 @@ async function fsRefreshNow() {
 function stopEditor() {
   stopFullscreenPolling();
   stopTallyPolling();
-  if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
-  hideKeypad();
-  closeInputPicker();
-  fsEditingUuid = null;
+  endWindowEdit();
   fsState = null;
 }
 
@@ -914,7 +907,9 @@ function stopTallyPolling() { if (fsTallyTimer) { clearTimeout(fsTallyTimer); fs
 function renderFullscreen() {
   const body = $('fsStageWrap');
   body.innerHTML = '';
-  hideKeypad(); // a full redraw only happens when nothing is being edited
+  // A full redraw only happens when nothing is being edited, so drop any lingering picker/cancel.
+  closeInputPicker();
+  hideFsCancel();
   const { widgets } = fsState;
   const soloView = fsIsSoloView(); // see fsIsSoloView: requires the head to really have 1 widget
   $('fsEditor').classList.toggle('soloed', soloView);
@@ -1008,73 +1003,24 @@ async function unsoloWindow() {
   finally { fsBusy = false; }
 }
 
-// ---- On-screen numeric keypad --------------------------------------------
-// The CTP touchscreen has no physical keyboard, so input-group numbers are typed on this
-// keypad. It's shown for BOTH layouts (on 1080 the operator can still use a real keyboard).
-// The keypad drives whichever window's input is currently open (.fs-window.editing), so it
-// needs no per-window wiring — it just targets the live editing field.
-
-function activeFsInput() {
-  const win = $('fsEditor').querySelector('.fs-window.editing');
-  return win ? win.querySelector('.fs-win-input') : null;
-}
-function showKeypad() {
-  const pad = $('fsKeypad');
-  if (pad) { pad.classList.add('show'); pad.setAttribute('aria-hidden', 'false'); }
-}
-function hideKeypad() {
-  const pad = $('fsKeypad');
-  if (pad) { pad.classList.remove('show'); pad.setAttribute('aria-hidden', 'true'); }
-}
-
-// Apply one keypad press to the open input. Enter is routed through the field's existing
-// keydown handler so the exact same commit() path runs (keypad and hardware Enter converge).
-function fsKeyPress(key) {
-  const input = activeFsInput();
-  if (!input) return;
-  if (key === 'enter') {
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-    return;
-  }
-  if (key === 'back') { input.value = input.value.slice(0, -1); return; }
-  if (/^[0-9]$/.test(key) && input.value.length < 4) input.value += key;
-}
-
-function buildKeypad() {
-  const pad = $('fsKeypad');
-  if (!pad) return;
-  pad.innerHTML = '';
-  // A tap in the GAP between keys lands on the board itself — swallow it so it can't blur the
-  // input (which would close the editor). Buttons still get their click.
-  pad.addEventListener('pointerdown', (e) => e.preventDefault());
-  ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'enter'].forEach((k) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'fs-key' + (k === 'enter' ? ' enter' : k === 'back' ? ' back' : '');
-    b.textContent = k === 'back' ? '⌫' : k === 'enter' ? '✓' : k;
-    if (k === 'enter') b.setAttribute('aria-label', 'Set input');
-    else if (k === 'back') b.setAttribute('aria-label', 'Delete last digit');
-    // Don't let a keypad tap move focus off the input — a blur would close the editor.
-    b.addEventListener('pointerdown', (e) => e.preventDefault());
-    b.addEventListener('click', () => fsKeyPress(k));
-    pad.appendChild(b);
-  });
-}
+// ---- Cancel button --------------------------------------------------------
+// Shown while a window is selected for editing (the input picker is open). Cancels the selection
+// without changing anything. Placed under the stage on 1080 and to the left-centre on the CTP.
+function showFsCancel() { const b = $('fsCancel'); if (b) b.hidden = false; }
+function hideFsCancel() { const b = $('fsCancel'); if (b) b.hidden = true; }
 
 // ---- Input picker (scrolling touch list of inputs, with live UMD names) ----
 // An alternative to typing an input number: a scrolling list that overtakes the snapshot-recall
 // area while a window is being edited. Each row shows the input number and its live UMD name (and
-// tally colour); tapping one repoints the window being edited. Opens together with the keypad on
-// a pip tap; either control commits through the same repointWindow() path.
+// tally colour); tapping one repoints the window being edited.
 
-// Close the whole edit interaction: drop the editing highlight, hide the keypad, and hide the
-// picker (restoring the snapshot list). Shared by commit, Escape, blur-away, and teardown.
+// Close the whole edit interaction: drop the editing highlight, hide the picker (restoring the
+// snapshot list) and the Cancel button. Shared by commit, the Cancel button, and teardown.
 function endWindowEdit() {
-  if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
   const win = $('fsEditor').querySelector('.fs-window.editing');
   if (win) win.classList.remove('editing');
-  hideKeypad();
   closeInputPicker();
+  hideFsCancel();
   fsEditingUuid = null;
 }
 
@@ -1159,6 +1105,7 @@ function openInputPicker(currentGroupUuid) {
   box.scrollTop = 0;
   const sel = box.querySelector('.ip-row.current');
   if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: 'center' });
+  showFsCancel();
 }
 
 function closeInputPicker() {
@@ -1201,61 +1148,20 @@ function createFsWindow(wd) {
     : '—';
   win.innerHTML = `
       <span class="fs-win-num"></span>
-      <input class="fs-win-input mono" inputmode="numeric" maxlength="4" />
       <span class="fs-win-name"></span>`;
   win.querySelector('.fs-win-num').textContent = label;
   paintFsWindowTally(win, wd);
 
-  const input = win.querySelector('.fs-win-input');
-  // On the CTP touchscreen there is no hardware keyboard — the on-screen keypad is the only
-  // way to type, so make the field read-only there to keep the OS keyboard from popping up.
-  // The keypad writes input.value directly, which works regardless of readOnly. On 1080 the
-  // field stays editable so a real keyboard still works alongside the keypad.
-  if (document.body.classList.contains('strip')) input.readOnly = true;
-
-  // Tap/click the window → begin entry and reveal the keypad. Disabled while soloed: source
-  // changes aren't allowed on a fullscreen window (decision), so a tap does nothing there.
+  // Tap/click the window → select it and open the input picker (over the snapshot area). Disabled
+  // while soloed: source changes aren't allowed on a fullscreen window (decision), so a tap does
+  // nothing there. Tapping straight from another pip just moves the selection (no teardown flicker).
   win.addEventListener('click', () => {
     if (fsState && fsState.soloed) return;
     if (win.classList.contains('editing')) return;
-    // Switching straight from another pip: cancel its pending teardown so the keypad/picker stay
-    // up (no flicker, no stage reflow) and just move to this window.
-    if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
     document.querySelectorAll('.fs-window.editing').forEach((w) => w.classList.remove('editing'));
     win.classList.add('editing');
     fsEditingUuid = wd.uuid;
-    input.value = '';
-    input.placeholder = grp && grp.number != null ? String(grp.number) : '';
-    input.focus();
-    showKeypad();
-    openInputPicker(wd.groupUuid); // list of inputs (with UMD) over the snapshot area
-  });
-
-  const commit = async () => {
-    const raw = input.value.trim();
-    endWindowEdit(); // clears editing state, keypad, and the picker
-    if (raw === '') return; // no change
-    const num = parseInt(raw, 10);
-    if (Number.isNaN(num)) { toast('Enter an input number, then press Enter.', 'err'); return; }
-    const target = groupByNumber(num);
-    if (!target) { toast(`No input group numbered ${num} on this card — check the number and try again.`, 'err'); return; }
-    await repointWindow(wd.uuid, target);
-  };
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); endWindowEdit(); }
-  });
-  input.addEventListener('blur', () => {
-    win.classList.remove('editing');
-    // Defer: a blur can be the operator tapping a DIFFERENT window (its click cancels this timer
-    // and re-targets) or a picker row (which preventDefaults, so no blur fires at all). Only tear
-    // the editor down when focus truly left everything.
-    if (fsEditTeardownTimer) clearTimeout(fsEditTeardownTimer);
-    fsEditTeardownTimer = setTimeout(() => {
-      fsEditTeardownTimer = null;
-      if (!activeFsInput()) endWindowEdit();
-    }, 0);
+    openInputPicker(wd.groupUuid);
   });
 
   // While soloed, replace the (hidden) input-number chrome with a persistent, centered
@@ -1320,7 +1226,7 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed, tally) {
 
 async function boot() {
   $('homeBtn').addEventListener('click', goHome);
-  buildKeypad();
+  $('fsCancel').addEventListener('click', endWindowEdit);
   $('cancelBtn').addEventListener('click', closeConfirm);
   $('fireBtn').addEventListener('click', fire);
   $('bkBannerX').addEventListener('click', () => {

@@ -33,10 +33,11 @@
         <div class="fs-editor" id="fsEditor">
           <div class="fs-body" id="fsBody">
             <div class="fs-stage-wrap" id="fsStageWrap"></div>
-            <!-- On-screen numeric keypad — appears beside the stage when a window is selected. -->
-            <div class="fs-keypad" id="fsKeypad" aria-hidden="true"></div>
           </div>
         </div>
+        <!-- Cancel the input selection (closes the picker). Under the stage on 1080; left-centre on
+             the CTP strip. Hidden until a window is selected. -->
+        <button class="fs-cancel" id="fsCancel" type="button" hidden>Cancel</button>
         <div class="toast fs-toast" id="fsToast"></div>
       </div>
     </section>

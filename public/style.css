@@ -429,46 +429,37 @@ body.strip .floater-panel { padding: 5px 10px; }
 body.strip .floater-panel .panelinfo-label { font-size: 13px; }
 body.strip .floater-panel .panelinfo-sub { font-size: 11px; }
 body.strip .floater.menu .floater-home { min-height: 44px; min-width: 54px; }
-/* CTP: keypad sits to the RIGHT of the stage (shrinking it), with big buttons. It extends to the
-   corner and opens OVER the Home button (z-index above the floater). */
-body.strip .fs-body { flex-direction: row; align-items: stretch; padding: 6px; gap: 6px; }
-body.strip .fs-keypad { grid-template-columns: repeat(3, 78px); grid-auto-rows: 60px; gap: 8px; }
-body.strip .fs-key { font-size: 24px; }
-/* Nudge the whole pip display right a touch. */
-body.strip .fs-stage-wrap { transform: translateX(30px); }
-/* Hide Show-all while the keypad is open (a window is being edited) — both layouts. */
-.menu-right:has(.fs-keypad.show) > .showall-slot { display: none; }
+/* CTP: no keypad — the pip stage fills the pane. Reserve a left gutter for the Cancel button
+   (placed left-centre, see .fs-cancel) so it never overlaps the stage. */
+body.strip .fs-body { padding: 6px 6px 6px 108px; }
 
 /* ---- Input-group editor (right pane) ---- */
 .card-with-preview { position: relative; }
-/* The keypad is a flex sibling of the stage: when it appears the stage shrinks to make room
-   (its 16:9 fit re-solves against the smaller wrap). 1080 stacks it below the stage; CTP puts
-   it to the right (see body.strip). */
+/* The stage fills its wrap; the input picker (left pane) and the Cancel button are the only
+   editing chrome, and neither resizes the stage. */
 .fs-body { flex: 1 1 auto; display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 8px; overflow: hidden; min-width: 0; min-height: 0; }
 .fs-stage-wrap { flex: 1 1 auto; min-width: 0; min-height: 0; display: grid; place-items: center; container-type: size; }
-/* Solid backing board: fills the gaps between keys and, with buildKeypad's pointerdown guard,
-   stops a between-keys tap from closing the editor. z-index sits ABOVE the Home button (z 40)
-   so the keypad opens over it, and below the confirm overlay (z 50). */
-.fs-keypad {
-  flex: 0 0 auto; align-self: center; display: none; position: relative; z-index: 45;
-  grid-template-columns: repeat(3, 76px); grid-auto-rows: 66px; gap: 8px;
-  padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-}
-.fs-keypad.show { display: grid; }
-.fs-key {
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
-  border-radius: var(--radius); font-size: 26px; font-weight: 600; cursor: pointer;
-  display: grid; place-items: center; line-height: 1; -webkit-tap-highlight-color: transparent;
-}
-.fs-key:active { transform: scale(0.96); }
-.fs-key.enter { background: var(--fire); border-color: var(--fire); color: #04121c; }
-.fs-key.back { color: var(--ink-dim); }
 
-/* 16:9 stage: the largest 16:9 box that fits its wrap in BOTH dimensions. Height is the
-   smaller of the wrap's height and the height a full-width 16:9 box would need — so it stays
-   inside the wrap whether the wrap is limited by height (short CTP strip) or by width (1080
-   with the keypad shown alongside). Width follows from the aspect ratio. cqh/cqw resolve
-   against the wrap (container-type: size). */
+/* Cancel button — closes the input selection. Absolutely positioned so it NEVER resizes the
+   stage. On 1080 it sits centred below the stage (the half-pane is much taller than 16:9, so
+   there's room beneath); on the CTP strip it sits at the left-centre, in the reserved gutter. */
+.fs-cancel {
+  position: absolute; z-index: 6; left: 50%; bottom: 14px; transform: translateX(-50%);
+  min-height: 46px; padding: 10px 26px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  font-size: 16px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.fs-cancel:active { transform: translateX(-50%) scale(0.96); }
+body.strip .fs-cancel {
+  left: 8px; bottom: auto; top: 50%; transform: translateY(-50%);
+  min-height: 44px; padding: 10px 16px; font-size: 15px;
+}
+body.strip .fs-cancel:active { transform: translateY(-50%) scale(0.96); }
+
+/* 16:9 stage: the largest 16:9 box that fits its wrap in BOTH dimensions. Height is the smaller
+   of the wrap's height and the height a full-width 16:9 box would need — so it stays inside the
+   wrap whether the wrap is limited by height (short CTP strip) or by width (1080). Width follows
+   from the aspect ratio. cqh/cqw resolve against the wrap (container-type: size). */
 .fs-stage {
   position: relative; aspect-ratio: 16 / 9;
   height: min(100cqh, calc(100cqw * 9 / 16)); width: auto;
@@ -494,15 +485,6 @@ body.strip .fs-window { gap: 2px; padding: 3px; }
 body.strip .fs-win-num { font-size: clamp(14px, 2.6vw, 30px); }
 body.strip .fs-win-name,
 body.strip .fs-window.has-umd .fs-win-name { font-size: 11px; line-height: 1.1; }
-/* Inline number entry — hidden until the window is tapped (editing). */
-.fs-win-input {
-  display: none; width: 80%; max-width: 160px; text-align: center;
-  font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1;
-  background: var(--bg); color: var(--ink); border: 1px solid var(--arm);
-  border-radius: 6px; padding: 2px 4px;
-}
-.fs-window.editing .fs-win-num { display: none; }
-.fs-window.editing .fs-win-input { display: block; }
 /* --- TSL UMD name (from Cerebrum) under the input number ------------------- */
 /* When a live UMD name is present it replaces the dim board group-name line and reads brighter,
    since it's the operator-facing source name. A stale feed (no update recently) dims and
