@@ -1116,7 +1116,8 @@ function buildInputPicker(currentGroupUuid) {
     row.type = 'button';
     row.className = 'ip-row' + (g.uuid === currentGroupUuid ? ' current' : '');
     row.dataset.groupUuid = g.uuid;
-    row.innerHTML = '<span class="ip-num mono"></span><span class="ip-name"></span>';
+    // Number, a small "input" caption (so it doesn't read as a camera number), then the UMD name.
+    row.innerHTML = '<span class="ip-num mono"></span><span class="ip-sub">input</span><span class="ip-name"></span>';
     row.querySelector('.ip-num').textContent = g.number != null ? g.number : '—';
     paintPickerRow(row, g);
     // Keep focus on the keypad field (mirrors the keypad's own trick) so a row tap doesn't blur

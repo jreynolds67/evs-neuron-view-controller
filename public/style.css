@@ -203,30 +203,34 @@ body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
 /* A scrolling touch list that OVERTAKES the snapshot list (.snap-list) while a window is being
    edited: each row is an input group (number + live UMD name + tally colour), tap to repoint. */
 .input-picker { display: none; flex: 1 1 auto; min-height: 0; overflow-y: scroll;
-  flex-direction: column; gap: 8px; padding: 10px 14px 16px; background: var(--panel);
-  touch-action: pan-y; /* keep scrolling even though rows preventDefault pointerdown */
+  padding: 10px 14px 16px; background: var(--panel);
+  touch-action: pan-y; /* keep scrolling even though cells preventDefault pointerdown */
   scrollbar-width: thin; scrollbar-color: var(--ink-faint) transparent; }
 .input-picker::-webkit-scrollbar { width: 14px; }
 .input-picker::-webkit-scrollbar-track { background: transparent; }
 .input-picker::-webkit-scrollbar-thumb { background: var(--ink-faint); border-radius: 8px;
   border: 3px solid transparent; background-clip: padding-box; min-height: 44px; }
 .menu-left.picking .snap-list { display: none; }
-.menu-left.picking .input-picker { display: flex; }
-.ip-row { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
-  min-height: 60px; padding: 8px 14px; border-radius: 10px; cursor: pointer;
-  background: var(--panel-2); color: var(--ink); border: 2px solid transparent; }
+/* 4-wide grid of input cells; each cell stacks number / "input" caption / UMD name. */
+.menu-left.picking .input-picker { display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 10px; align-content: start; }
+.ip-row { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; min-height: 84px; padding: 10px 8px; border-radius: 10px; text-align: center;
+  cursor: pointer; background: var(--panel-2); color: var(--ink); border: 2px solid transparent; }
 .ip-row:active { background: var(--pip-fill-strong); }
 .ip-row.current { border-color: var(--arm); }
-.ip-num { font-size: 26px; font-weight: 700; min-width: 52px; text-align: center; }
-.ip-name { font-size: 16px; color: var(--ink-dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ip-num { font-size: 30px; font-weight: 700; line-height: 1; }
+.ip-sub { font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint); }
+.ip-name { margin-top: 3px; font-size: 14px; color: var(--ink-dim);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ip-row.has-umd .ip-name { color: var(--ink); font-weight: 600; }
 .ip-row.umd-stale .ip-name { color: var(--ink-dim); font-style: italic; opacity: 0.7; }
-/* Compact the rows on the short CTP strip. */
-body.strip .input-picker { padding: 6px 10px 10px; gap: 6px; }
-body.strip .ip-row { min-height: 48px; padding: 6px 10px; gap: 10px; }
-body.strip .ip-num { font-size: 20px; min-width: 40px; }
-body.strip .ip-name { font-size: 14px; }
+/* Compact the cells on the short CTP strip. */
+body.strip .input-picker { padding: 6px 10px 10px; }
+body.strip .menu-left.picking .input-picker { gap: 6px; }
+body.strip .ip-row { min-height: 66px; padding: 6px; }
+body.strip .ip-num { font-size: 22px; }
+body.strip .ip-name { font-size: 12px; }
 
 /* "No snapshots available for this head" message inside the snapshot grid. Spans all
    columns (the grid may still carry head-grid-fixed from the heads view) so it reads as a
