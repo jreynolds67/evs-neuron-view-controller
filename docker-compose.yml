@@ -28,6 +28,12 @@ services:
       # BOARD_PORT: "443"                 # override if the API is on a nonstandard port
       # Set to "true" only if boards present a CA-trusted cert (rare on broadcast gear).
       BOARD_TLS_REJECT_UNAUTHORIZED: ${BOARD_TLS_REJECT_UNAUTHORIZED:-false}
+      # TSL UMD (tally) receiver. Can also be enabled/tuned in the admin page (Setup tab); these
+      # env vars force the values at boot. On ipvlan/macvlan the container owns its whole port
+      # range, so the UDP/TCP port below is reachable at its LAN IP with no port publishing.
+      # TSL_ENABLED: "1"                   # force the receiver on (point Cerebrum at this IP)
+      # TSL_PORT: "5728"                   # port the receiver binds (UDP by default)
+      # TSL_TCP: "1"                       # also accept TSL over TCP
     volumes:
       - neuron_config:/data
 

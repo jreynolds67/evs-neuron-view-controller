@@ -63,6 +63,7 @@ function applyConfigDefaults(c) {
   c.headFilters ||= {};
   c.panelGroups ||= [];
   c.settings ||= { showUuids: true };
+  c.settings.tsl ||= { enabled: false, udp: true, tcp: false, port: 5728, indexOffset: 0 };
   c.shareSweep ||= { enabled: false, intervalSec: 60, targets: [] };
   c.backup ||= { enabled: false, cardId: '', timeHHMM: '03:00', retentionCount: 30 };
   return c;
@@ -73,6 +74,7 @@ function applyConfigDefaults(c) {
 // redrawn would keep showing the PREVIOUS config's values while a later Save wrote the new ones.
 function renderAllFromConfig() {
   $('showUuids').checked = config.settings.showUuids !== false;
+  renderTslSettings();
   renderCards(); renderPanels(); renderHeadFilterCards();
   // If a card's head filters are open, re-render their checkboxes against the config we just
   // adopted — otherwise they'd still show the PREVIOUS config's ticks, which a later Save would

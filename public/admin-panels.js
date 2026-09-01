@@ -13,6 +13,7 @@ function renderCards() {
       <td><input value="${esc(c.id || '')}" data-i="${i}" data-f="id"></td>
       <td><input value="${esc(c.label || '')}" data-i="${i}" data-f="label"></td>
       <td><input value="${esc(c.ip || '')}" data-i="${i}" data-f="ip" placeholder="10.10.60.x"></td>
+      <td><input value="${c.tslScreen ?? ''}" data-i="${i}" data-f="tslScreen" inputmode="numeric" placeholder="${i}" title="TSL 5.0 screen index Cerebrum sends for this card. Blank = ${i} (this card's position)."></td>
       <td><div class="stor" data-stor="${esc(c.id || '')}"><span class="stor-idle muted">—</span></div></td>
       <td class="card-actions">
         <button class="btn sm suspend${c.suspended ? ' on' : ''}" data-susp="${i}"
@@ -177,6 +178,39 @@ $('addCard').addEventListener('click', () => {
 $('showUuids').addEventListener('change', (e) => {
   config.settings ||= {};
   config.settings.showUuids = e.target.checked;
+});
+
+// ---- TSL tally (UMD) settings ---------------------------------------------
+// Populate the TSL fields from the held config. Changes edit config.settings.tsl in place and
+// take effect on the next Save (the server rebinds the receiver then). Env vars (TSL_*) override
+// these at boot, so the status readout is the source of truth for what's actually bound.
+function renderTslSettings() {
+  const t = (config.settings && config.settings.tsl) || {};
+  $('tslEnabled').checked = !!t.enabled;
+  $('tslUdp').checked = t.udp !== false;
+  $('tslTcp').checked = !!t.tcp;
+  $('tslPort').value = t.port ?? 5728;
+  $('tslOffset').value = t.indexOffset ?? 0;
+}
+function tslCfg() { config.settings ||= {}; config.settings.tsl ||= {}; return config.settings.tsl; }
+$('tslEnabled').addEventListener('change', (e) => { tslCfg().enabled = e.target.checked; });
+$('tslUdp').addEventListener('change', (e) => { tslCfg().udp = e.target.checked; });
+$('tslTcp').addEventListener('change', (e) => { tslCfg().tcp = e.target.checked; });
+$('tslPort').addEventListener('input', (e) => { tslCfg().port = parseInt(e.target.value, 10) || 5728; });
+$('tslOffset').addEventListener('input', (e) => { tslCfg().indexOffset = parseInt(e.target.value, 10) || 0; });
+$('tslStatusBtn').addEventListener('click', async () => {
+  const el = $('tslStatus');
+  el.textContent = 'Checking…';
+  try {
+    const s = await adminFetch('/api/admin/tsl/status', { headers: headers() }).then((r) => r.json());
+    if (!s.enabled) { el.textContent = 'Receiver disabled (Save after enabling to start it).'; return; }
+    const bound = [s.udpBound && `UDP :${s.port}`, s.tcpBound && `TCP :${s.port}`].filter(Boolean).join(', ') || 'not bound';
+    const last = s.lastPacketAt ? `${Math.round((Date.now() - s.lastPacketAt) / 1000)}s ago` : 'never';
+    el.textContent = `${bound} · ${s.packets} packets (last ${last}) · ${s.entries} names cached`
+      + (s.lastError ? ` · last error: ${s.lastError}` : '');
+  } catch (err) {
+    el.textContent = `Status check failed: ${err.message}`;
+  }
 });
 
 // ---- Panels ---------------------------------------------------------------

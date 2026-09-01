@@ -13,6 +13,7 @@ import { startShareSweep } from './sharesweep.js';
 import { startBackupScheduler } from './backup.js';
 import { touchSession, sessionIdFromReq } from './auth.js';
 import { attachControlWs } from './control.js';
+import { startTsl } from './tsl.js';
 import panelRoutes from './panelroutes.js';
 import adminRoutes from './adminroutes.js';
 
@@ -83,6 +84,9 @@ server.listen(PORT, async () => {
   console.log(`Config path: ${process.env.CONFIG_PATH || '/data/config.json'}`);
   try {
     const cfg = await loadConfig();
+    // Start the TSL UMD receiver from config (+ env overrides). Never fatal: a bind failure logs
+    // and leaves the rest of the app running.
+    try { startTsl(cfg); } catch (e) { console.error('[tsl] start failed:', e.message); }
     if (!cfg.admin || !cfg.admin.user || !cfg.admin.passwordHash) {
       console.log('WARNING: no admin credential configured — admin login is unavailable until '
         + 'config.admin.{user,passwordHash} is set. Generate a hash with: node server/auth.js "password"');

@@ -348,11 +348,34 @@
       <div class="section">
         <h2>MV cards</h2>
         <table>
-          <thead><tr><th style="width:100px">ID</th><th style="width:150px">Label</th><th style="width:140px">Board IP</th><th style="width:240px">Storage</th><th style="width:190px"></th></tr></thead>
+          <thead><tr><th style="width:100px">ID</th><th style="width:150px">Label</th><th style="width:140px">Board IP</th><th style="width:96px" title="Which TSL 5.0 screen index Cerebrum sends for this card's UMDs. Blank = card position (0 = first card).">TSL screen</th><th style="width:220px">Storage</th><th style="width:170px"></th></tr></thead>
           <tbody id="cardRows"></tbody>
         </table>
         <div style="margin-top:12px" class="inline">
           <button class="btn sm" id="addCard">Add card</button>
+        </div>
+      </div>
+
+      <!-- TSL TALLY (UMD) -->
+      <div class="section">
+        <h2>TSL tally (UMD) input</h2>
+        <div class="desc">Receive TSL 5.0 UMD data (e.g. from Cerebrum) and show each source's UMD
+          name under its input number in the operator view. Point Cerebrum at this server's IP on
+          the port below; set each display's <em>Screen</em> to the card's TSL screen (above) and its
+          <em>Index</em> to the input number.</div>
+        <label class="inline" style="cursor:pointer; gap:10px; margin-bottom:10px">
+          <input type="checkbox" id="tslEnabled" style="width:18px; height:18px">
+          <span>Enable the TSL UMD receiver</span>
+        </label>
+        <div class="inline" style="gap:16px; flex-wrap:wrap; margin-bottom:10px">
+          <label class="inline" style="gap:6px">Port <input id="tslPort" inputmode="numeric" style="width:80px" placeholder="5728"></label>
+          <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="tslUdp" style="width:16px; height:16px"> UDP</label>
+          <label class="inline" style="gap:6px; cursor:pointer"><input type="checkbox" id="tslTcp" style="width:16px; height:16px"> TCP</label>
+          <label class="inline" style="gap:6px" title="Added to the TSL display Index to get the input number. 0 if Cerebrum sends the input number directly; 1 if it sends 0-based indices.">Index offset <input id="tslOffset" inputmode="numeric" style="width:56px" placeholder="0"></label>
+        </div>
+        <div class="inline" style="gap:10px">
+          <button class="btn sm" id="tslStatusBtn" type="button">Check receiver status</button>
+          <span id="tslStatus" class="muted" style="font-size:13px"></span>
         </div>
       </div>
 

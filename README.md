@@ -23,6 +23,7 @@ restore — that path does not exist in the code.
 - [Install & deploy](#install--deploy)
 - [Networking (ipvlan / macvlan)](#networking-ipvlan--macvlan)
 - [Environment variables](#environment-variables)
+- [TSL tally (UMD) input](#tsl-tally-umd-input)
 - [Local development](#local-development)
 - [Operational notes & hardware quirks](#operational-notes--hardware-quirks)
 - [Repository layout](#repository-layout)
@@ -401,6 +402,30 @@ networks:
 | `BOARD_TLS_REJECT_UNAUTHORIZED` | `false` | Set `true` only if boards present a CA-trusted cert (rare on broadcast gear). |
 | `BOARD_EXPORT_TIMEOUT_MS` | `600000` (10 min) | Timeout for whole-board snapshot exports (backups). Separate from the 8s default used for ordinary API calls, since an export streams the card's full snapshot storage. |
 | `TRUST_PROXY` | (off) | Set `1` **only** if a trusted reverse proxy sits in front and sets `X-Forwarded-For`. Off by default so the header can't be forged to impersonate a panel on a flat network. The proxy must **overwrite** the header with the real client address, not append to one the client sent — the app trusts the first hop, and an appended header lets a client pick its own identity (panel impersonation, login-throttle bypass). |
+| `TSL_ENABLED` | (config) | Force the TSL UMD receiver on/off, overriding the admin setting. Useful to enable it purely from compose. |
+| `TSL_PORT` | `5728` | Port the TSL UMD receiver binds. Overrides the admin setting. If bound below 1024 the container needs the privilege to do so. |
+| `TSL_UDP` / `TSL_TCP` | `1` / `0` | Force the UDP / TCP transports on or off, overriding the admin settings. |
+
+## TSL tally (UMD) input
+
+The app can receive **TSL UMD Protocol v5.0** tally data and show each source's UMD name under
+its input number in the operator's per-window editor. Point a TSL 5.0 source (e.g. Cerebrum) at
+this server's IP and the configured port.
+
+- **Screen → card.** Each TSL packet carries a *Screen* index; it selects the MV card. Set a
+  card's **TSL screen** in the admin cards table, or leave it blank to use the card's position
+  (screen `0` = first card).
+- **Index → input number.** Each display's *Index* is the input group number the name appears
+  under. If your source sends 0‑based indices, set the admin **Index offset** to `1`.
+- **Enable & ports** live under *Setup → TSL tally (UMD) input*; **Check receiver status** shows
+  whether it is bound and how many packets/names have arrived. `TSL_*` env vars override the
+  saved settings at boot.
+- **Tally colour** (red = on air, amber = next/iso, green = preview) is shown as a thin accent
+  bar on the window. A source that stops updating is dimmed after ~15 s so a dropped feed is
+  obvious rather than showing a frozen name.
+
+The receiver reads only — it never writes to the boards — and a name is best-effort overlay: if
+no tally is present for an input, the board's group name is shown as before.
 
 ## Local development
 
@@ -459,6 +484,7 @@ server/
   panelroutes.js  Panel-facing API (/api/panel): flow endpoints, hot-read caches, solo
   adminroutes.js  Admin API (/api/admin): login, config, probes, backups, diagnostics
   control.js      Control WebSocket channel (panel reload / admin config-changed)
+  tsl.js          TSL UMD v5.0 receiver (UDP/TCP): parses tally, caches names per screen/index
   board.js        Neuron board client (firmware 1.13); partials-only restore lives here
   config.js       JSON-on-volume config store (cached, atomic writes, legacy migration)
   auth.js         Admin login: scrypt hashing, sessions, cookies

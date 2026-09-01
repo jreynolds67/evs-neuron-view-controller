@@ -14,6 +14,7 @@ import {
   deleteHeadWidget, createHeadWidget, setWidgetFull, setWidgetFullscreenVideoOnly,
 } from './board.js';
 import { isSoloed, getSolo, setSolo, clearSolo } from './solostore.js';
+import { getTallyForScreen } from './tsl.js';
 import { log } from './logger.js';
 import { backupStatus } from './backup.js';
 import { createTtlCache } from './cache.js';
@@ -392,6 +393,26 @@ router.get('/cards/:cardId/heads/:headUuid/groups', async (req, res) => {
     }));
     res.json({ groups: out });
   } catch (e) { sendPanelErr(res, e); }
+});
+
+// Which TSL 5.0 screen index maps to this card. Explicit per-card `tslScreen` wins; otherwise
+// fall back to the card's position in the config (screen 0 = first card), which matches the
+// common "screen 0 -> card 1" Cerebrum setup. Returns null when the card isn't in the list.
+function screenForCard(config, cardId) {
+  const c = getCardById(config, cardId);
+  if (c && Number.isFinite(Number(c.tslScreen))) return Number(c.tslScreen);
+  const idx = (config.cards || []).findIndex((x) => x.id === cardId);
+  return idx >= 0 ? idx : null;
+}
+
+// TSL UMD names for a head's card, keyed by input number. Reads the in-memory TSL store only —
+// no board round-trip — so it's cheap enough to poll alongside the live preview. The frontend
+// shows each input group's UMD name under its input number.
+router.get('/cards/:cardId/heads/:headUuid/tally', async (req, res) => {
+  const r = await resolveHeadRequest(req, res);
+  if (!r) return;
+  const screen = screenForCard(r.config, r.card.id);
+  res.json({ screen, tally: screen == null ? {} : getTallyForScreen(screen) });
 });
 
 // Repoint a window (widget) to a different input group. LIVE EDIT to the on-air board.

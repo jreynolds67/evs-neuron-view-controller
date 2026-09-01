@@ -459,6 +459,22 @@ body.strip .fs-stage-wrap { transform: translateX(30px); }
 }
 .fs-window.editing .fs-win-num { display: none; }
 .fs-window.editing .fs-win-input { display: block; }
+/* --- TSL UMD name (from Cerebrum) under the input number ------------------- */
+/* When a live UMD name is present it replaces the dim board group-name line and reads brighter,
+   since it's the operator-facing source name. A stale feed (no update recently) dims and
+   italicises so a dropped UMD source is obvious rather than showing a frozen name. */
+.fs-window.has-umd .fs-win-name { color: var(--ink); font-weight: 600; font-size: 13px; }
+.fs-window.umd-stale .fs-win-name { color: var(--ink-dim); font-style: italic; opacity: 0.7; }
+/* Tally colour accent: a thin bar across the top of the window (red = on air, amber = next/iso,
+   green = preview). Purely additive to the existing green window border. */
+.fs-window[class*="tally-"]::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px;
+  background: var(--tally); border-radius: 3px 3px 0 0;
+}
+.fs-window.tally-red { --tally: #ff3b3b; }
+.fs-window.tally-amber { --tally: #ffb020; }
+.fs-window.tally-green { --tally: var(--fire); }
+.fs-editor.soloed .fs-window::before { display: none; }
 /* Soloed (one window blown up to fullscreen): highlight it and hide the input-number chrome,
    since source editing is disabled here — the only gesture is press-and-hold to restore. */
 /* Soloed (one window blown up to fullscreen): the enlarged view turns GREEN to match the green

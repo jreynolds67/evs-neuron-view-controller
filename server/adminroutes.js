@@ -25,6 +25,7 @@ import {
   sessionIdFromReq, setSessionCookie, clearSessionCookie,
 } from './auth.js';
 import { broadcastControl, clientIdOf } from './control.js';
+import { startTsl, tslStatus } from './tsl.js';
 import { clientIp } from './util.js';
 
 const router = express.Router();
@@ -170,6 +171,26 @@ router.put('/config', requireAdmin, async (req, res) => {
   if (currentVersion !== clientVersion) return stale409();
 
   next.settings = { showUuids: true, ...(next.settings || {}) };
+  // Normalise the TSL UMD receiver settings so the config file stays clean and startTsl gets
+  // sane values. Ports/enable can also come from env (TSL_*) at boot — those win at runtime.
+  if (next.settings.tsl && typeof next.settings.tsl === 'object') {
+    const t = next.settings.tsl;
+    const port = parseInt(t.port, 10);
+    next.settings.tsl = {
+      enabled: !!t.enabled,
+      udp: t.udp !== false,
+      tcp: !!t.tcp,
+      port: Number.isFinite(port) ? Math.max(1, Math.min(65535, port)) : 5728,
+      indexOffset: Number.isFinite(parseInt(t.indexOffset, 10)) ? parseInt(t.indexOffset, 10) : 0,
+      staleMs: Number.isFinite(parseInt(t.staleMs, 10)) ? Math.max(1000, parseInt(t.staleMs, 10)) : 15000,
+    };
+  }
+  // Per-card TSL screen index (which TSL 5.0 screen maps to this card). A real integer or
+  // nothing — drop blanks so cards without a mapping stay clean in the file.
+  next.cards.forEach((c) => {
+    const s = parseInt(c.tslScreen, 10);
+    if (Number.isFinite(s)) c.tslScreen = s; else delete c.tslScreen;
+  });
   if (!next.headFilters || typeof next.headFilters !== 'object') next.headFilters = {};
   if (!Array.isArray(next.panelGroups)) next.panelGroups = [];
 
@@ -248,6 +269,9 @@ router.put('/config', requireAdmin, async (req, res) => {
   // Re-apply the sweep scheduler from the just-saved config so a change takes effect now.
   // (The backup scheduler re-reads config every minute, so it needs no explicit reschedule.)
   if (next.shareSweep) { try { await applyShareSweepConfig(); } catch (e) { console.warn('[sharesweep] apply failed:', e.message); } }
+  // Re-apply the TSL receiver from the just-saved config so an enable/port/transport change binds
+  // now. startTsl is idempotent — unchanged transport settings leave the sockets in place.
+  try { startTsl(next); } catch (e) { console.warn('[tsl] apply failed:', e.message); }
   // Tell every connected panel to reload so config changes apply immediately.
   broadcastControl({ type: 'reload' });
   // Separately, tell any other ADMIN page that the config moved. Deliberately NOT the same
@@ -267,6 +291,12 @@ router.put('/config', requireAdmin, async (req, res) => {
   // reload as an unexplained change. `admin` is stripped, exactly as on GET /config.
   const { admin: _admin, ...safeSaved } = saved;
   res.json({ ok: true, configVersion: saved.configVersion, config: safeSaved });
+});
+
+// TSL UMD receiver diagnostics: whether it's bound, on which port/transport, packet counts and
+// the last error. Lets the admin confirm Cerebrum is actually reaching this app.
+router.get('/tsl/status', requireAdmin, (_req, res) => {
+  res.json(tslStatus());
 });
 
 // --- board probes ----------------------------------------------------------

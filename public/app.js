@@ -720,11 +720,19 @@ function fsIsSoloView() {
 // the post-operation refresh, so the three can't drift — their differing staleness guards
 // stay at the call sites, where they are load-bearing (see REVIEW_NOTES §3).
 async function fetchFsData(head) {
-  const [preview, { groups }] = await Promise.all([
+  const [preview, { groups }, tallyRes] = await Promise.all([
     api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/preview`),
     api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/groups`),
+    // TSL UMD names are best-effort: a failure here must never break the live editor, so swallow
+    // it and fall back to the group name.
+    api(`/api/panel/cards/${head.cardId}/heads/${head.headUuid}/tally`).catch(() => ({ tally: {} })),
   ]);
-  return { widgets: preview.widgets || [], groups: groups || [], soloed: !!preview.soloed };
+  return {
+    widgets: preview.widgets || [],
+    groups: groups || [],
+    soloed: !!preview.soloed,
+    tally: (tallyRes && tallyRes.tally) || {},
+  };
 }
 
 // Load the right-pane live editor for a head. Called when the menu opens (and re-used by the
@@ -774,7 +782,7 @@ function startFullscreenPolling() {
         // repaint over the fresher render.
         if (fsState && fsState.head === head && !fsStale(token) && !fsBusy) {
           if (fsIsEditing()) {
-            updateFullscreenPreservingEdit(data.widgets, data.groups, data.soloed);
+            updateFullscreenPreservingEdit(data.widgets, data.groups, data.soloed, data.tally);
           } else {
             fsState = { head, ...data };
             renderFullscreen();
@@ -818,6 +826,12 @@ function groupByUuid(uuid) {
 }
 function groupByNumber(num) {
   return fsState.groups.find((g) => g.number === num) || null;
+}
+// The live TSL UMD entry for a group, keyed by its input NUMBER (the big number on the pip).
+// Returns { text, tally, stale, ... } or null when there's no tally for that input.
+function umdForGroup(grp) {
+  if (!grp || grp.number == null || !fsState || !fsState.tally) return null;
+  return fsState.tally[grp.number] || null;
 }
 
 function renderFullscreen() {
@@ -983,7 +997,23 @@ function createFsWindow(wd) {
       <input class="fs-win-input mono" inputmode="numeric" maxlength="4" />
       <span class="fs-win-name"></span>`;
   win.querySelector('.fs-win-num').textContent = label;
-  win.querySelector('.fs-win-name').textContent = grp ? (grp.name || '') : 'unassigned';
+
+  // Under the input number, prefer the live TSL UMD name (from Cerebrum) keyed by this window's
+  // input group number; fall back to the board's group name, then "unassigned". The tally colour
+  // (red = on air, green = preview) becomes a subtle top-edge accent bar, and a source that
+  // stopped updating is dimmed so a dropped UMD feed is obvious rather than showing a frozen name.
+  const nameEl = win.querySelector('.fs-win-name');
+  const umd = umdForGroup(grp);
+  if (umd && umd.text) {
+    nameEl.textContent = umd.text;
+    win.classList.add('has-umd');
+    if (umd.stale) win.classList.add('umd-stale');
+    const t = umd.tally || {};
+    const colour = [t.left, t.right, t.text].find((c) => c && c !== 'off');
+    if (colour) win.classList.add(`tally-${colour}`);
+  } else {
+    nameEl.textContent = grp ? (grp.name || '') : 'unassigned';
+  }
 
   const input = win.querySelector('.fs-win-input');
   // On the CTP touchscreen there is no hardware keyboard — the on-screen keypad is the only
@@ -1074,7 +1104,7 @@ function createFsWindow(wd) {
 // or repointed a different window on this same head, and that should show up live — but the
 // field being typed into must be left exactly as-is. Rebuilds every OTHER window from fresh
 // data and leaves the editing window's DOM node untouched.
-function updateFullscreenPreservingEdit(widgets, groups, soloed) {
+function updateFullscreenPreservingEdit(widgets, groups, soloed, tally) {
   const editor = $('fsEditor');
   const editingWin = editor ? editor.querySelector('.fs-window.editing') : null;
   const editingUuid = editingWin ? editingWin.dataset.widgetUuid : null;
@@ -1086,7 +1116,7 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed) {
   if (editingUuid && !widgets.some((w) => w.uuid === editingUuid)) return;
 
   // Adopt the fresh data as the source of truth (commit() and label lookups read fsState).
-  fsState = { head: fsState.head, widgets, groups, soloed: !!soloed };
+  fsState = { head: fsState.head, widgets, groups, soloed: !!soloed, tally: tally || {} };
 
   const stage = $('fsStageWrap').querySelector('.fs-stage');
   if (!stage) { renderFullscreen(); return; }
