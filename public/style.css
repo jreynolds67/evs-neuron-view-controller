@@ -469,9 +469,9 @@ body.strip .fs-stage-wrap { transform: translateX(30px); }
    green = preview. Suppressed while editing (the arm colour owns the border) and while soloed
    (that view forces its green frame). On-air red also gets a soft glow so it reads at a glance.
    Border WIDTH is left at 2px so the coloured state never nudges the window's geometry. */
-.fs-window.tally-red:not(.editing)   { border-color: #ff3b3b; box-shadow: 0 0 11px rgba(255, 59, 59, 0.55); }
-.fs-window.tally-amber:not(.editing) { border-color: #ffb020; }
-.fs-window.tally-green:not(.editing) { border-color: var(--fire); }
+.fs-window.tally-red:not(.editing)   { border-color: #ff3b3b; box-shadow: inset 0 0 0 3px #ff3b3b, 0 0 11px rgba(255, 59, 59, 0.55); }
+.fs-window.tally-amber:not(.editing) { border-color: #ffb020; box-shadow: inset 0 0 0 3px #ffb020; }
+.fs-window.tally-green:not(.editing) { border-color: var(--fire); box-shadow: inset 0 0 0 3px var(--fire); }
 /* Soloed (one window blown up to fullscreen): highlight it and hide the input-number chrome,
    since source editing is disabled here — the only gesture is press-and-hold to restore. */
 /* Soloed (one window blown up to fullscreen): the enlarged view turns GREEN to match the green
