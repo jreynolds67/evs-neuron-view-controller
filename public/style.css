@@ -475,6 +475,8 @@ body.strip .fs-cancel:active { transform: translateY(-50%) scale(0.96); }
 }
 .fs-window:active { background: var(--pip-fill-strong); }
 .fs-window.editing { background: var(--pip-fill); border-color: var(--arm); }
+/* Live hardware-keyboard entry: the typed number shows in the selected pip, in the edit colour. */
+.fs-window.typing .fs-win-num { color: var(--arm); }
 .fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
 .fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
