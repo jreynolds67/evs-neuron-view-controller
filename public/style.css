@@ -465,16 +465,13 @@ body.strip .fs-stage-wrap { transform: translateX(30px); }
    italicises so a dropped UMD source is obvious rather than showing a frozen name. */
 .fs-window.has-umd .fs-win-name { color: var(--ink); font-weight: 600; font-size: 13px; }
 .fs-window.umd-stale .fs-win-name { color: var(--ink-dim); font-style: italic; opacity: 0.7; }
-/* Tally colour accent: a thin bar across the top of the window (red = on air, amber = next/iso,
-   green = preview). Purely additive to the existing green window border. */
-.fs-window[class*="tally-"]::before {
-  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px;
-  background: var(--tally); border-radius: 3px 3px 0 0;
-}
-.fs-window.tally-red { --tally: #ff3b3b; }
-.fs-window.tally-amber { --tally: #ffb020; }
-.fs-window.tally-green { --tally: var(--fire); }
-.fs-editor.soloed .fs-window::before { display: none; }
+/* Tally colour (from Cerebrum) becomes the window's OWN border: red = on air, amber = next/iso,
+   green = preview. Suppressed while editing (the arm colour owns the border) and while soloed
+   (that view forces its green frame). On-air red also gets a soft glow so it reads at a glance.
+   Border WIDTH is left at 2px so the coloured state never nudges the window's geometry. */
+.fs-window.tally-red:not(.editing)   { border-color: #ff3b3b; box-shadow: 0 0 11px rgba(255, 59, 59, 0.55); }
+.fs-window.tally-amber:not(.editing) { border-color: #ffb020; }
+.fs-window.tally-green:not(.editing) { border-color: var(--fire); }
 /* Soloed (one window blown up to fullscreen): highlight it and hide the input-number chrome,
    since source editing is disabled here — the only gesture is press-and-hold to restore. */
 /* Soloed (one window blown up to fullscreen): the enlarged view turns GREEN to match the green
@@ -482,7 +479,7 @@ body.strip .fs-stage-wrap { transform: translateX(30px); }
    shows how to go back. */
 .fs-editor.soloed .fs-window {
   border-color: var(--fire); border-width: 3px;
-  background: var(--pip-fill);
+  background: var(--pip-fill); box-shadow: none; /* clear any tally glow — solo view is always green */
 }
 .fs-editor.soloed .fs-win-num,
 .fs-editor.soloed .fs-win-name { display: none; }
