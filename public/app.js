@@ -700,6 +700,10 @@ let fsPollTimer = null;
 // focus/`editing` class so the input picker — which lives in the far LEFT pane — can repoint the
 // right window even after a tap over there moved focus off the keypad field.
 let fsEditingUuid = null;
+// Pending "tear down the editor after focus left" timer (see the input blur handler). Held at
+// module scope so that tapping straight from one pip to another can CANCEL it — otherwise the
+// brief keypad hide/re-show between the two taps reflows the stage mid-press.
+let fsEditTeardownTimer = null;
 // Generation token for the enlarged view. Any operation that changes the head (solo/unsolo)
 // bumps it, so a poll whose fetch STARTED earlier can't land afterwards and repaint stale data
 // over the fresh render — the bug where restoring flashed, then snapped back to the fullscreen
@@ -823,6 +827,7 @@ async function fsRefreshNow() {
 function stopEditor() {
   stopFullscreenPolling();
   stopTallyPolling();
+  if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
   hideKeypad();
   closeInputPicker();
   fsEditingUuid = null;
@@ -929,11 +934,20 @@ function renderFullscreen() {
 
 // Press-and-hold detection on a window. Fires once after `ms` if the pointer hasn't moved far,
 // and suppresses the click that follows so a hold doesn't also trigger tap-to-edit.
+//
+// The press CAPTURES the pointer. Without capture, a plain tap could silently turn into a
+// fullscreen: tapping a second pip while another is being edited hides/re-shows the keypad, which
+// reflows the stage and slides the pip out from under the finger — so its pointerup landed on a
+// different element, never cancelled the timer, and the hold fired 500ms later. Capture guarantees
+// pointerup/pointercancel come back to THIS element even if it moves or is rebuilt mid-press, so a
+// real tap always cancels the timer. lostpointercapture (fired if the node is detached by a live
+// re-render) is treated as a cancel for the same reason.
 function addLongPress(el, handler, ms = 500) {
   let timer = null, fired = false, sx = 0, sy = 0;
   const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
   el.addEventListener('pointerdown', (e) => {
     fired = false; sx = e.clientX; sy = e.clientY; cancel();
+    try { el.setPointerCapture(e.pointerId); } catch {}
     timer = setTimeout(() => { fired = true; timer = null; handler(); }, ms);
   });
   el.addEventListener('pointermove', (e) => {
@@ -941,6 +955,7 @@ function addLongPress(el, handler, ms = 500) {
   });
   el.addEventListener('pointerup', cancel);
   el.addEventListener('pointercancel', () => { cancel(); fired = false; });
+  el.addEventListener('lostpointercapture', cancel);
   el.addEventListener('click', (e) => { if (fired) { e.stopPropagation(); e.preventDefault(); fired = false; } }, true);
 }
 
@@ -1055,6 +1070,7 @@ function buildKeypad() {
 // Close the whole edit interaction: drop the editing highlight, hide the keypad, and hide the
 // picker (restoring the snapshot list). Shared by commit, Escape, blur-away, and teardown.
 function endWindowEdit() {
+  if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
   const win = $('fsEditor').querySelector('.fs-window.editing');
   if (win) win.classList.remove('editing');
   hideKeypad();
@@ -1202,6 +1218,10 @@ function createFsWindow(wd) {
   win.addEventListener('click', () => {
     if (fsState && fsState.soloed) return;
     if (win.classList.contains('editing')) return;
+    // Switching straight from another pip: cancel its pending teardown so the keypad/picker stay
+    // up (no flicker, no stage reflow) and just move to this window.
+    if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
+    document.querySelectorAll('.fs-window.editing').forEach((w) => w.classList.remove('editing'));
     win.classList.add('editing');
     fsEditingUuid = wd.uuid;
     input.value = '';
@@ -1228,10 +1248,14 @@ function createFsWindow(wd) {
   });
   input.addEventListener('blur', () => {
     win.classList.remove('editing');
-    // Defer: a blur can be the operator tapping a DIFFERENT window (which focuses its own field
-    // synchronously after this) or a picker row (which preventDefaults, so no blur fires at all).
-    // Only tear the editor down when focus truly left everything.
-    setTimeout(() => { if (!activeFsInput()) endWindowEdit(); }, 0);
+    // Defer: a blur can be the operator tapping a DIFFERENT window (its click cancels this timer
+    // and re-targets) or a picker row (which preventDefaults, so no blur fires at all). Only tear
+    // the editor down when focus truly left everything.
+    if (fsEditTeardownTimer) clearTimeout(fsEditTeardownTimer);
+    fsEditTeardownTimer = setTimeout(() => {
+      fsEditTeardownTimer = null;
+      if (!activeFsInput()) endWindowEdit();
+    }, 0);
   });
 
   // While soloed, replace the (hidden) input-number chrome with a persistent, centered
