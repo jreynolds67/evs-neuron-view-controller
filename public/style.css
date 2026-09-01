@@ -214,23 +214,27 @@ body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
 /* 4-wide grid of input cells; each cell stacks number / "input" caption / UMD name. */
 .menu-left.picking .input-picker { display: grid; grid-template-columns: repeat(4, 1fr);
   gap: 10px; align-content: start; }
-.ip-row { display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; min-height: 84px; padding: 10px 8px; border-radius: 10px; text-align: center;
+.ip-row { position: relative; display: flex; align-items: center; justify-content: center;
+  min-height: 86px; padding: 26px 10px 14px; border-radius: 10px; text-align: center;
   cursor: pointer; background: var(--panel-2); color: var(--ink); border: 2px solid transparent; }
 .ip-row:active { background: var(--pip-fill-strong); }
 .ip-row.current { border-color: var(--arm); }
-.ip-num { font-size: 30px; font-weight: 700; line-height: 1; }
-.ip-sub { font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint); }
-.ip-name { margin-top: 3px; font-size: 14px; color: var(--ink-dim);
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ip-row.has-umd .ip-name { color: var(--ink); font-weight: 600; }
+/* Small "input n" badge, tucked into the top-left corner. */
+.ip-badge { position: absolute; top: 6px; left: 9px; display: flex; align-items: baseline; gap: 4px; }
+.ip-sub { font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint); }
+.ip-num { font-size: 15px; font-weight: 700; line-height: 1; color: var(--ink-dim); }
+/* UMD name is the main content: larger, centered, up to two lines. */
+.ip-name { font-size: 18px; font-weight: 600; line-height: 1.15; color: var(--ink-dim);
+  max-width: 100%; word-break: break-word; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ip-row.has-umd .ip-name { color: var(--ink); }
 .ip-row.umd-stale .ip-name { color: var(--ink-dim); font-style: italic; opacity: 0.7; }
 /* Compact the cells on the short CTP strip. */
 body.strip .input-picker { padding: 6px 10px 10px; }
 body.strip .menu-left.picking .input-picker { gap: 6px; }
-body.strip .ip-row { min-height: 66px; padding: 6px; }
-body.strip .ip-num { font-size: 22px; }
-body.strip .ip-name { font-size: 12px; }
+body.strip .ip-row { min-height: 64px; padding: 20px 6px 8px; }
+body.strip .ip-num { font-size: 13px; }
+body.strip .ip-name { font-size: 15px; -webkit-line-clamp: 1; }
 
 /* "No snapshots available for this head" message inside the snapshot grid. Spans all
    columns (the grid may still carry head-grid-fixed from the heads view) so it reads as a
