@@ -1287,15 +1287,41 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed, tally) {
 // the threshold nothing is captured, so real taps pass straight through. Safe on engines that DO
 // scroll natively too: there the browser claims the gesture and fires pointercancel, which ends
 // our tracking before we fight it, and native scrolling happens as normal.
+//
+// Release with speed = a flick: the finger's velocity at lift-off carries the list on in a
+// friction-decayed rAF loop, so a quick swipe scrolls far (as native momentum does on the 1080
+// panels) instead of stopping dead. A new touch — or hitting either end — cancels the glide.
 function enableTouchDragScroll(el) {
   if (!el || el._touchScroll) return;
   el._touchScroll = true;
   let startY = 0, startScroll = 0, id = null, moved = false;
+  let vy = 0, lastY = 0, lastT = 0, glide = null;
+
+  const stopGlide = () => { if (glide) { cancelAnimationFrame(glide); glide = null; } };
+
+  // Coast on after release. `v` is scrollTop px per ms (positive = scrolling down). Each frame
+  // advances by v·dt and decays v; stop when it's slow or the list hits an end.
+  const startGlide = (v) => {
+    stopGlide();
+    let prev = performance.now();
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    const step = (now) => {
+      const dt = Math.min(now - prev, 32); // clamp so a dropped frame can't jump the list
+      prev = now;
+      el.scrollTop += v * dt;
+      v *= Math.pow(0.9, dt / 16); // ~friction: lose ~10% of speed every 16ms
+      if (Math.abs(v) < 0.02 || el.scrollTop <= 0 || el.scrollTop >= maxScroll) { glide = null; return; }
+      glide = requestAnimationFrame(step);
+    };
+    glide = requestAnimationFrame(step);
+  };
 
   el.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return; // ignore right/middle mouse
+    stopGlide();                        // a new touch grabs the list, halting any glide
     id = e.pointerId; moved = false;
     startY = e.clientY; startScroll = el.scrollTop;
+    lastY = e.clientY; lastT = performance.now(); vy = 0;
   });
 
   el.addEventListener('pointermove', (e) => {
@@ -1307,9 +1333,22 @@ function enableTouchDragScroll(el) {
       try { el.setPointerCapture(id); } catch {}
     }
     el.scrollTop = startScroll - dy;
+    // Track finger velocity in scrollTop units (opposite sign to finger travel), smoothed a little
+    // so one jittery sample can't dominate the flick. performance.now() rather than e.timeStamp —
+    // a monotonic clock that doesn't depend on the embedded browser's event-timestamp behaviour.
+    const now = performance.now();
+    const dt = now - lastT;
+    if (dt > 0) { vy = 0.7 * (-(e.clientY - lastY) / dt) + 0.3 * vy; lastY = e.clientY; lastT = now; }
   });
 
-  const end = (e) => { if (id !== null && e.pointerId === id) id = null; };
+  const end = (e) => {
+    if (id === null || e.pointerId !== id) return;
+    id = null;
+    // Flick only if the finger was still moving at release (last sample fresh) and fast enough.
+    if (moved && performance.now() - lastT < 80 && Math.abs(vy) > 0.05) {
+      startGlide(Math.max(-8, Math.min(8, vy))); // cap runaway speed
+    }
+  };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
 
