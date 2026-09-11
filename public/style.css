@@ -184,11 +184,11 @@ body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
 .snap-list {
   scrollbar-width: thin;                              /* Firefox fallback */
   scrollbar-color: var(--ink-faint) transparent;
-  /* Momentum + explicit vertical-pan hint for the embedded CTP browser: older WebKit/Chromium
-     kiosk builds only touch-scroll a nested overflow element when momentum scrolling is enabled
-     and the gesture is claimed as a vertical pan. Ignored/default on modern engines. */
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  /* Scrolling is driven by JS (enableTouchDragScroll) because the embedded CTP browser won't
+     touch-scroll a nested overflow element. touch-action:none stops that browser from CLAIMING a
+     vertical drag for its own (broken) pan — which would fire pointercancel and kill our tracking
+     before it scrolls. With the gesture unclaimed, every pointermove reaches the shim. */
+  touch-action: none;
 }
 .screen-heads .stage::-webkit-scrollbar,
 .snap-list::-webkit-scrollbar { width: 14px; }
@@ -209,7 +209,7 @@ body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
    edited: each row is an input group (number + live UMD name + tally colour), tap to repoint. */
 .input-picker { display: none; flex: 1 1 auto; min-height: 0; overflow-y: scroll;
   padding: 10px 14px 16px; background: var(--panel);
-  touch-action: pan-y; /* keep scrolling even though cells preventDefault pointerdown */
+  touch-action: none; /* scrolled by JS (enableTouchDragScroll); don't let the CTP browser claim the drag */
   scrollbar-width: thin; scrollbar-color: var(--ink-faint) transparent; }
 .input-picker::-webkit-scrollbar { width: 14px; }
 .input-picker::-webkit-scrollbar-track { background: transparent; }

@@ -1273,9 +1273,63 @@ function updateFullscreenPreservingEdit(widgets, groups, soloed, tally) {
   existing.forEach((el, uuid) => { if (!seen.has(uuid) && uuid !== editingUuid) el.remove(); });
 }
 
+// ---- Touch drag-scroll --------------------------------------------------
+// The embedded CTP browser does not natively touch-scroll a nested overflow container (the head
+// grid, the snapshot list, the input picker) — a finger drag on the content is ignored, so long
+// lists are unreachable. Neither overflow:scroll, -webkit-overflow-scrolling nor touch-action
+// changes that on this engine. So drive scrollTop directly: track the finger with Pointer Events
+// (the input the CTP is known to fire — long-press and input-picking already ride on them) and
+// move the container 1:1.
+//
+// A drag past a small threshold captures the pointer (so move/up keep coming to the container even
+// as its content slides out from under the finger) and swallows the click it would otherwise fire
+// on the start element (open a head, repoint an input), so dragging never doubles as a tap. Below
+// the threshold nothing is captured, so real taps pass straight through. Safe on engines that DO
+// scroll natively too: there the browser claims the gesture and fires pointercancel, which ends
+// our tracking before we fight it, and native scrolling happens as normal.
+function enableTouchDragScroll(el) {
+  if (!el || el._touchScroll) return;
+  el._touchScroll = true;
+  let startY = 0, startScroll = 0, id = null, moved = false;
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return; // ignore right/middle mouse
+    id = e.pointerId; moved = false;
+    startY = e.clientY; startScroll = el.scrollTop;
+  });
+
+  el.addEventListener('pointermove', (e) => {
+    if (id === null || e.pointerId !== id) return;
+    const dy = e.clientY - startY;
+    if (!moved) {
+      if (Math.abs(dy) < 8) return; // small movement is still a tap — leave it alone
+      moved = true;
+      try { el.setPointerCapture(id); } catch {}
+    }
+    el.scrollTop = startScroll - dy;
+  });
+
+  const end = (e) => { if (id !== null && e.pointerId === id) id = null; };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+
+  // A drag fires a click on the element under the finger at release; swallow it (capture phase,
+  // before it reaches a head card or picker row) so a scroll can't also open a menu or repoint an
+  // input. A tap never sets `moved`, so it passes straight through. Persistent listener + flag —
+  // no add/remove race against the click that follows pointerup.
+  el.addEventListener('click', (e) => {
+    if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; }
+  }, true);
+}
+
 // ---- Boot -----------------------------------------------------------------
 
 async function boot() {
+  // Drive touch scrolling by hand on the CTP's embedded browser (see enableTouchDragScroll).
+  // All three lists are static elements present from load, so wiring them once here is enough.
+  enableTouchDragScroll(document.querySelector('#screenHeads .stage'));
+  enableTouchDragScroll($('snapList'));
+  enableTouchDragScroll($('inputPicker'));
   $('homeBtn').addEventListener('click', goHome);
   $('fsCancel').addEventListener('click', endWindowEdit);
   $('cancelBtn').addEventListener('click', closeConfirm);
