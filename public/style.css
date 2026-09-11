@@ -494,13 +494,19 @@ body.strip .fs-cancel:active { transform: translateY(-50%) scale(0.96); }
 .fs-win-num { font-size: clamp(20px, 4vw, 56px); font-weight: 700; line-height: 1; }
 .fs-win-name { font-size: 12px; color: var(--ink-dim); text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-/* CTP strip (291px tall): the pip is short, so the full-size input number fills the window and
-   pushes the UMD name line out of the clipped area. Shrink the number and tighten spacing on the
-   strip so the name fits under it. */
-body.strip .fs-window { gap: 2px; padding: 3px; }
-body.strip .fs-win-num { font-size: clamp(14px, 2.6vw, 30px); }
+/* CTP strip (291px tall): pips can be very small on dense heads. The number and UMD name used to
+   be sized off the viewport / a fixed 11px, so they did NOT shrink with the pip — on a short pip
+   the full-size number filled it and pushed the UMD name out of the clipped area. Instead scale
+   both to the PIP's own height: make each pip a size container and size its text in cqh, so the
+   number gets smaller as the pip does and the name always keeps a row. Caps hold the look on large
+   pips (same 30px number as before); floors keep the text legible on tiny ones. The plain px
+   font-size before each clamp is a fallback for any engine that ignores container units. */
+body.strip .fs-window { gap: 2px; padding: 3px; container-type: size; }
+body.strip .fs-win-num { font-size: 24px; font-size: clamp(10px, 40cqh, 30px); }
 body.strip .fs-win-name,
-body.strip .fs-window.has-umd .fs-win-name { font-size: 11px; line-height: 1.1; }
+body.strip .fs-window.has-umd .fs-win-name {
+  font-size: 11px; font-size: clamp(8px, 18cqh, 12px); line-height: 1.1;
+}
 /* Keyboard entry field — hidden until the pip is selected (editing), then it replaces the number.
    No on-screen keypad: an operator with a keyboard types here and presses Enter. */
 .fs-win-input {
