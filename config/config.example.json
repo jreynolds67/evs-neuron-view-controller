@@ -16,6 +16,7 @@
       "layout": "1080",
       "group": "Production Control",
       "allowShowAll": false,
+      "allowEditInputs": true,
       "heads": [
         {
           "cardId": "mv1",

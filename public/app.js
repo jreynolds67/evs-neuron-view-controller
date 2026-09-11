@@ -12,6 +12,7 @@ const state = {
   snap: null,     // { uuid, name, ... } — the snapshot behind a pending Confirm
   srcHead: null,  // snapshot source head { uuid, name } — the pick behind a pending Confirm
   showUuids: true,
+  allowEditInputs: true, // admin-gated per panel: may the operator repoint a window's input group?
   showAllActive: false, // "Show all" override for the menu's snapshot list
   // Whether the list the pending pick came from was fetched under "Show all". The restore has
   // to tell the server the pick came from "Show all", or the server re-applies the per-head
@@ -1171,10 +1172,17 @@ function createFsWindow(wd) {
   // field is editable so an operator can type the input number and press Enter.
   if (document.body.classList.contains('strip')) input.readOnly = true;
 
+  // When input editing is disabled for this panel the editor is a live READ-ONLY view: the pip
+  // still shows its input number, UMD name and tally, but can't be repointed. Mark it so CSS drops
+  // the tap affordance; the tap handler below no-ops. Long-press (solo/restore) is a separate
+  // capability and stays available.
+  if (!state.allowEditInputs) win.classList.add('readonly');
+
   // Tap/click the window → select it, reveal the keyboard entry field, and open the input picker
   // (over the snapshot area). Disabled while soloed. Tapping straight from another pip just moves
   // the selection (its pending teardown is cancelled), no flicker.
   win.addEventListener('click', () => {
+    if (!state.allowEditInputs) return; // editing disabled for this panel — read-only view
     if (fsState && fsState.soloed) return;
     if (win.classList.contains('editing')) return;
     if (fsEditTeardownTimer) { clearTimeout(fsEditTeardownTimer); fsEditTeardownTimer = null; }
@@ -1383,6 +1391,7 @@ async function boot() {
   try {
     state.panel = await api('/api/panel/me');
     state.showUuids = state.panel.showUuids !== false;
+    state.allowEditInputs = state.panel.allowEditInputs !== false;
     document.body.classList.toggle('strip', state.panel.layout === 'strip');
     // Panel identity is shown on the head-picker header.
     $('panelLabel').textContent = state.panel.label || 'Neuron MV Control';

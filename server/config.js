@@ -24,6 +24,7 @@ const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 //       layout: "1080" | "strip",    // 1920x1080 or 1835x291 (CTP)
 //       group: "Production Control", // admin-list group name ("" = ungrouped)
 //       allowShowAll: false,
+//       allowEditInputs: true,       // absent/true = operator may repoint windows; false = read-only editor
 //       heads: [ { cardId, headUuid, boardName, label, order }, ... ],
 //       layoutGrid: [ { type: "head", cardId, headUuid } | { type: "blank" }, ... ] // row-major
 //     }

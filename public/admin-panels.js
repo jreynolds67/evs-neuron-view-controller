@@ -596,6 +596,12 @@ function renderPanelDetail(pi) {
       </label>
     </div>
     <div style="margin-top:14px">
+      <label class="inline" style="cursor:pointer; gap:8px">
+        <input type="checkbox" id="allowEditInputs-${pi}" ${p.allowEditInputs !== false ? 'checked' : ''} style="width:18px;height:18px">
+        <span>Allow operators to edit input groups (repoint windows) on this panel</span>
+      </label>
+    </div>
+    <div style="margin-top:14px">
       <label class="muted">Heads on this panel (in display order)</label>
       <div id="headList-${pi}" style="margin-top:6px"></div>
       <div class="inline" style="margin-top:8px">
@@ -638,6 +644,14 @@ function renderPanelDetail(pi) {
   if (showAllCb) {
     showAllCb.addEventListener('change', (e) => {
       config.panels[pi].allowShowAll = e.target.checked;
+    });
+  }
+  // Input-group editing is on by default (absent flag = allowed), so only WRITE the flag when it's
+  // turned off — storing false explicitly. Unchecking restricts this panel to a read-only editor.
+  const editInputsCb = box.querySelector(`#allowEditInputs-${pi}`);
+  if (editInputsCb) {
+    editInputsCb.addEventListener('change', (e) => {
+      config.panels[pi].allowEditInputs = e.target.checked;
     });
   }
   box.querySelector('[data-duppanel]').addEventListener('click', () => duplicatePanel(pi));

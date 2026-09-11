@@ -155,6 +155,9 @@ router.get('/me', async (req, res) => {
     grid,
     showUuids: config.settings?.showUuids !== false,
     allowShowAll: panel.allowShowAll === true,
+    // Input-group editing (repointing a window) is on by default; an admin can turn it off per
+    // panel to make the live editor read-only. Absent flag = allowed, so existing configs keep it.
+    allowEditInputs: panel.allowEditInputs !== false,
   });
 });
 
@@ -420,7 +423,16 @@ router.get('/cards/:cardId/heads/:headUuid/tally', async (req, res) => {
 router.post('/cards/:cardId/heads/:headUuid/widgets/:widgetUuid/group', async (req, res) => {
   const r = await resolveHeadRequest(req, res);
   if (!r) return;
-  const { card } = r;
+  const { card, panel } = r;
+  // Input-group editing is admin-gated per panel (default allowed). The client hides the editor
+  // when it's off, but this is the authoritative check — a panel with editing disabled cannot
+  // repoint a window even by calling the endpoint directly.
+  if (panel.allowEditInputs === false) {
+    return res.status(403).json({
+      error: 'Input editing is disabled on this panel — ask an engineer to enable it.',
+      code: 'EDIT_DISABLED',
+    });
+  }
   const { groupUuid } = req.body || {};
   if (!groupUuid) return res.status(400).json({ error: 'groupUuid is required' });
   if (cardSuspended(res, card)) return;
