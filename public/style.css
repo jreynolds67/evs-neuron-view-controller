@@ -58,7 +58,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 
 /* Floating item, bottom-right of the app: panel name/IP on the home screen, Home button in a
-   menu. Absolute inside .app so it stays on the fixed 1835x291 box on CTP; z-index sits BELOW
+   menu. Absolute inside .app so it stays within the 1835x291 box on CTP; z-index sits BELOW
    the confirm overlay (z 50) so the dialog covers it. */
 .floater {
   position: absolute; right: 16px; bottom: 16px; z-index: 40;
@@ -184,6 +184,11 @@ body.strip .grid.head-grid-fixed { padding-bottom: 56px; }
 .snap-list {
   scrollbar-width: thin;                              /* Firefox fallback */
   scrollbar-color: var(--ink-faint) transparent;
+  /* Momentum + explicit vertical-pan hint for the embedded CTP browser: older WebKit/Chromium
+     kiosk builds only touch-scroll a nested overflow element when momentum scrolling is enabled
+     and the gesture is claimed as a vertical pan. Ignored/default on modern engines. */
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 .screen-heads .stage::-webkit-scrollbar,
 .snap-list::-webkit-scrollbar { width: 14px; }
@@ -393,11 +398,18 @@ body.strip .sheet .row .btn { min-height: 46px; }
 /* CTP panels must render at the exact physical panel size regardless of what the embedded
    browser reports for the viewport. Some panels expose a scrollable viewport TALLER than the
    291px screen; with the default height:100% shell that pushed content below the visible strip.
-   Pin the shell — and the confirm overlay — to a fixed 1835x291 box at the top-left so nothing
-   can drift off-screen or scroll. */
+   Clamp the PAGE itself to a fixed 1835x291 box at the top-left (html/body already carry
+   overflow:hidden) so nothing can drift off-screen — but keep .app in normal flow.
+
+   Do NOT put .app into a `position: fixed` layer: the embedded CTP browser fails to deliver
+   touch-drag scroll gestures to an overflow:scroll element (.stage / .snap-list) nested inside
+   a fixed subtree — the pan gets routed to the unscrollable document, so the lists won't scroll
+   by finger. The 1080 layout scrolls fine precisely because its .app stays in flow, so the strip
+   reuses that exact structure: clamp the body, leave .app relative. */
+body.strip { height: 291px; }
 body.strip .app {
-  position: fixed; top: 0; left: 0;
-  width: 1835px; height: 291px;
+  position: relative; top: 0; left: 0;
+  width: 1835px; height: 100%;
 }
 /* The confirm overlay is normally inset:0 (the whole viewport). On a tall viewport that centers
    the sheet off the physical screen — clamp it to the same fixed 1835x291 box. */
