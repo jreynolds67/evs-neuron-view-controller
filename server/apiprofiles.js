@@ -38,7 +38,12 @@ const PROFILES = [
   {
     version: '2.0',
     spec: 'api 2-0.yml',
-    colorDigits: 8,          // color::rrggbbaa (see COLOR_ALPHA_POSITION)
+    // The 2.0 spec shows `color::ffffffff`, but real 2.0 firmware stores and returns 6-digit
+    // colors (verified on hardware 2026-09-29). It ACCEPTS 8 digits without error and stores
+    // them verbatim, so writing the spec's format silently corrupts widgets — which is how
+    // un-solo came to restore every window with 8-digit colors. Stay on 6 digits; any 8-digit
+    // value already on a card (from that bug) is narrowed back on its next write.
+    colorDigits: 6,
     boxJustification: true,  // box elements REQUIRE `justification`
     licensing: true,         // GET /v1/misc/licensing
     // 2.0 added App.productDate to /v1/self as a required (nullable) field. Structural, so it

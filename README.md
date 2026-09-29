@@ -232,7 +232,7 @@ What differs between the profiles today:
 
 | | 1.13 | 2.0 |
 | --- | --- | --- |
-| Colors | `color::rrggbb` | `color::rrggbbaa` (converted both ways; 2.0 → 1.13 drops alpha) |
+| Colors | `color::rrggbb` | `color::rrggbb` — the spec shows 8 digits, but real 2.0 firmware uses 6 (see below) |
 | Box `justification` | not accepted — stripped | required — added as `''` (board default) if missing; previews honour it |
 | `GET /v1/misc/licensing` | — | shown per card on the Setup tab |
 
@@ -241,9 +241,11 @@ one, and append a profile to `server/apiprofiles.js` with a `detect()` signature
 changed fields. Only fields this app *writes* (widget bodies) or *interprets* (preview hints)
 need handling; purely additive releases can simply alias the previous profile's shaping.
 
-> The 2.0 spec shows 8-digit colors only as `ffffffff`, so the byte order isn't documented.
-> The app assumes **RRGGBBAA**. If 2.0 previews show wrong hues, flip
-> `COLOR_ALPHA_POSITION` in `server/apiprofiles.js` to `'leading'` (AARRGGBB).
+> **Trust the hardware over the spec for colors.** The 2.0 spec shows `color::ffffffff`, but
+> real 2.0 cards store and return 6-digit colors. They also *accept* 8 digits without error and
+> store them verbatim, so writing the spec's format silently corrupts widgets. Writes therefore
+> stay on 6 digits, and any 8-digit color found on a card is narrowed back (assuming alpha is
+> trailing, `COLOR_ALPHA_POSITION` in `server/apiprofiles.js`). Previews accept either width.
 
 ## Configuration reference
 
