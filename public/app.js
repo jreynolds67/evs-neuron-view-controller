@@ -145,13 +145,18 @@ function buildPreviewSvg(widgets, { w = 320, h = 180 } = {}) {
         }
       }
 
-      // text label if present and there is room
+      // text label if present and there is room, placed per the element's justification
+      // (API 2.0+; null = centered, which is also how every 1.13 label renders)
       if (el.text && eW > 20 && eH > 10) {
+        const j = el.justify || {};
+        const pad = 2;
+        const tx = j.h === 'left' ? ex + pad : j.h === 'right' ? ex + eW - pad : ex + eW / 2;
+        const ty = j.v === 'top' ? ey + pad : j.v === 'bottom' ? ey + eH - pad : ey + eH / 2;
         const t = document.createElementNS(SVGNS, 'text');
-        t.setAttribute('x', ex + eW / 2); t.setAttribute('y', ey + eH / 2);
+        t.setAttribute('x', tx); t.setAttribute('y', ty);
         t.setAttribute('class', 'preview-label');
-        t.setAttribute('text-anchor', 'middle');
-        t.setAttribute('dominant-baseline', 'central');
+        t.setAttribute('text-anchor', j.h === 'left' ? 'start' : j.h === 'right' ? 'end' : 'middle');
+        t.setAttribute('dominant-baseline', j.v === 'top' ? 'hanging' : j.v === 'bottom' ? 'text-after-edge' : 'central');
         t.textContent = el.text.length > 18 ? el.text.slice(0, 17) + '…' : el.text;
         svg.appendChild(t);
       }

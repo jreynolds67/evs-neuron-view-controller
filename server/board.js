@@ -1,5 +1,7 @@
 // server/board.js
-// Thin client for a single EVS Neuron View board API (firmware 1.13 — see api 1-13.yaml).
+// Thin client for a single EVS Neuron View board API. Supports every API version with a profile
+// in apiprofiles.js (currently 1.13 and 2.0 — see the matching api *.yaml specs); which one a
+// card speaks is pinned per card in config or auto-detected (see profileFor below).
 // Boards speak HTTPS with a self-signed certificate (default), so we use a scoped
 // HTTPS agent that accepts the board's cert WITHOUT weakening TLS for any other
 // outbound request in the process.
@@ -11,6 +13,9 @@
 import { Agent } from 'undici';
 import { log, describeError } from './logger.js';
 import { isUuid } from './util.js';
+import {
+  getProfile, detectProfile, shapeWidget, colorToCss, parseJustification, FALLBACK_VERSION,
+} from './apiprofiles.js';
 
 // Default timeout for ordinary board API calls (small JSON reads/writes).
 const API_TIMEOUT_MS = 8000;
@@ -148,6 +153,82 @@ async function boardFetch(ip, path, options = {}) {
 
 export async function getSelf(ip) {
   return boardFetch(ip, '/self');
+}
+
+// --- API version per card --------------------------------------------------
+// Which API profile a card speaks. An admin pin (config cards[].apiVersion, pushed here by
+// config.js like the suspended set) always wins. Otherwise the card is detected from /v1/self
+// and the result cached for DETECT_TTL_MS, so a firmware upgrade/downgrade is picked up on its
+// own within minutes — and immediately if a shaped write is rejected (see writeWidget).
+const DETECT_TTL_MS = 10 * 60 * 1000;
+let apiPins = new Map();          // ip -> pinned version
+const _detected = new Map();      // ip -> { profile, at, self }
+const _detecting = new Map();     // ip -> Promise (coalesces a solo's parallel writes)
+
+export function setApiVersionPins(pins) {
+  apiPins = pins instanceof Map ? pins : new Map(Object.entries(pins || {}));
+}
+
+async function detect(ip, { fresh = false } = {}) {
+  const hit = _detected.get(ip);
+  if (!fresh && hit && (Date.now() - hit.at) < DETECT_TTL_MS) return hit;
+  const pending = _detecting.get(ip);
+  if (pending) return pending;
+  const p = (async () => {
+    const self = await getSelf(ip);
+    const profile = detectProfile(self);
+    if (hit && hit.profile.version !== profile.version) {
+      log({ ip, method: 'API', path: '/self', status: null, ok: true,
+        detail: `card API changed ${hit.profile.version} -> ${profile.version} (auto-detected)` });
+    }
+    const entry = { profile, at: Date.now(), self };
+    _detected.set(ip, entry);
+    return entry;
+  })();
+  _detecting.set(ip, p);
+  try { return await p; } finally { _detecting.delete(ip); }
+}
+
+// The profile to shape writes for. Never throws: an undetectable card (e.g. /self failing)
+// gets the fallback, and the failed detection isn't cached so the next call retries it.
+async function profileFor(ip, { fresh = false } = {}) {
+  const pinned = getProfile(apiPins.get(ip));
+  if (pinned) return pinned;
+  try { return (await detect(ip, { fresh })).profile; }
+  catch { return getProfile(FALLBACK_VERSION); }
+}
+
+// Admin view of a card's API version: what's in effect, where it came from, and what the
+// board itself looks like — so a pin that disagrees with the hardware is visible. Always
+// re-detects (this backs explicit admin probes, not hot paths).
+export async function getApiInfo(ip) {
+  const pinnedVersion = getProfile(apiPins.get(ip)) ? apiPins.get(ip) : null;
+  const { profile, self } = await detect(ip, { fresh: true });
+  return {
+    effective: pinnedVersion || profile.version,
+    source: pinnedVersion ? 'pinned' : 'detected',
+    pinned: pinnedVersion,
+    detected: profile.version,
+    mismatch: !!pinnedVersion && pinnedVersion !== profile.version,
+    product: self?.app?.productName || null,
+    productVersion: self?.app?.productVersion || null,
+  };
+}
+
+// Licensed features and their usage (API 2.0+). { supported: false } on a card whose API
+// predates the endpoint, rather than a 404 surfacing as an error.
+export async function getLicensing(ip) {
+  const profile = await profileFor(ip);
+  if (!profile.licensing) return { supported: false, version: profile.version };
+  const l = await boardFetch(ip, '/misc/licensing');
+  return {
+    supported: true,
+    version: profile.version,
+    lastUpdated: l?.lastUpdated ?? null,
+    features: (Array.isArray(l?.features) ? l.features : []).map((f) => ({
+      name: String(f?.name ?? ''), used: Number(f?.used) || 0, limit: Number(f?.limit) || 0,
+    })),
+  };
 }
 
 export async function getSnapshotInfo(ip) {
@@ -339,8 +420,7 @@ async function getHeadWidget(ip, headUuid, widgetUuid) {
 }
 
 // Reduce a widget (WidgetGet or a captured copy) to the WidgetChange body the board accepts
-// on POST/PUT, optionally overriding fields. Every widget write goes through this one shape,
-// so a firmware schema change is a single edit.
+// on POST/PUT, optionally overriding fields. Version-specific shaping happens in writeWidget.
 function toWidgetChange(w, overrides = {}) {
   return {
     elements: w.elements || [],
@@ -350,6 +430,25 @@ function toWidgetChange(w, overrides = {}) {
     properties: w.properties || { borderColor: '', borderSize: '' },
     ...overrides,
   };
+}
+
+// EVERY widget write goes through here, so the body is always shaped for the card's API
+// version (apiprofiles.shapeWidget). If an auto-detected card rejects the body (400/422), its
+// firmware may have changed under us — re-detect once and, if the version really moved,
+// resend reshaped. A pinned card is never second-guessed: the admin said what it runs.
+async function writeWidget(ip, path, method, change) {
+  const profile = await profileFor(ip);
+  const send = (p) => boardFetch(ip, path, { method, body: JSON.stringify(shapeWidget(change, p)) });
+  try {
+    return await send(profile);
+  } catch (e) {
+    if ((e.status !== 400 && e.status !== 422) || apiPins.has(ip)) throw e;
+    const again = await profileFor(ip, { fresh: true });
+    if (again.version === profile.version) throw e;
+    log({ ip, method: 'API', path, status: e.status, ok: false,
+      detail: `write rejected as ${profile.version}; card now detects as ${again.version} — retrying` });
+    return send(again);
+  }
 }
 
 // Repoint a widget to a different input group. The board API has no conditional/versioned
@@ -419,10 +518,7 @@ export async function setWidgetGroup(ip, headUuid, widgetUuid, groupUuid) {
   const change = toWidgetChange(fresh, { groupUuid });
   let result;
   try {
-    result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
-      method: 'PUT',
-      body: JSON.stringify(change),
-    });
+    result = await writeWidget(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, 'PUT', change);
   } catch (e) {
     // The widget could vanish in the tiny gap between our read and this write, too.
     if (e && e.status === 404) throw recalledErr();
@@ -452,17 +548,13 @@ export async function deleteHeadWidget(ip, headUuid, widgetUuid) {
 // Recreate a widget on a head from a captured WidgetGet. The board assigns a NEW uuid (fine —
 // this app never persists widget UUIDs). Body is a WidgetChange (WidgetGet minus uuid).
 export async function createHeadWidget(ip, headUuid, widget) {
-  return boardFetch(ip, `/heads/${headUuid}/widgets`, {
-    method: 'POST', body: JSON.stringify(toWidgetChange(widget)),
-  });
+  return writeWidget(ip, `/heads/${headUuid}/widgets`, 'POST', toWidgetChange(widget));
 }
 
 // PUT a widget's full definition back (keeps its uuid). Used to restore the survivor to its
 // captured original (elements, geometry, border, source) when un-soloing.
 export async function setWidgetFull(ip, headUuid, widgetUuid, widget) {
-  return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
-    method: 'PUT', body: JSON.stringify(toWidgetChange(widget)),
-  });
+  return writeWidget(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, 'PUT', toWidgetChange(widget));
 }
 
 // Turn a widget into a full-canvas, VIDEO-ONLY window: geometry to full, keep only its `pip`
@@ -481,9 +573,7 @@ export async function setWidgetFullscreenVideoOnly(ip, headUuid, widgetUuid) {
     // Drop any border so it's pure video.
     properties: { borderColor: '', borderSize: '' },
   });
-  const result = await boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, {
-    method: 'PUT', body: JSON.stringify(change),
-  });
+  const result = await writeWidget(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, 'PUT', change);
   log({
     ip, method: 'SOLO', path: `/heads/${headUuid}/widgets/${widgetUuid}`, status: null, ok: true,
     detail: `fullscreen video-only (${pips.length ? `${pips.length} pip` : 'no pip — kept elements'})`,
@@ -500,10 +590,11 @@ export function normalizeWidgetForPreview(w) {
     : { x: 0, y: 0, width: 0, height: 0 };
 
   // Pull a human-ish label and a color out of an element's typed properties. Property
-  // values are "type::value" strings (e.g. text::Hello, color::ffffff, protocol::0).
+  // values are "type::value" strings (e.g. text::Hello, color::ffffff[ff], protocol::0).
+  // Tolerant of every API version: 6- or 8-digit colors, justification present or absent.
   function elementHints(el) {
     const p = el.properties || {};
-    const out = { text: null, color: null, borderColor: null };
+    const out = { text: null, color: null, borderColor: null, justify: null };
     const decode = (v) => {
       if (typeof v !== 'string' || !v.includes('::')) return null;
       const [kind, ...rest] = v.split('::');
@@ -527,8 +618,10 @@ export function normalizeWidgetForPreview(w) {
     // (protocol::, reference::) are shown as a neutral marker since we can't resolve them.
     for (const [key, dst] of [['backgroundColor', 'color'], ['borderColor', 'borderColor']]) {
       const d = decode(p[key]);
-      if (d && d.kind === 'color') out[dst] = `#${d.value}`;
+      if (d && d.kind === 'color') out[dst] = colorToCss(d.value);
     }
+    // Text placement within the element (API 2.0+; absent/empty = centered).
+    if (out.text) out.justify = parseJustification(p.justification);
     return out;
   }
 

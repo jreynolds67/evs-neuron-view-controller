@@ -18,6 +18,7 @@ restore — that path does not exist in the code.
 - [The partials-only guarantee](#the-partials-only-guarantee)
 - [Live preview refresh & caching](#live-preview-refresh--caching)
 - [Fullscreen ("solo") a window](#fullscreen-solo-a-window)
+- [Board API versions](#board-api-versions)
 - [Configuration reference](#configuration-reference)
 - [Admin login](#admin-login)
 - [Install & deploy](#install--deploy)
@@ -121,6 +122,9 @@ The admin page (`/admin.html`, login-gated) has four tabs:
   with it, so a card can go for maintenance without rebuilding its config. It takes effect on
   **Save**; operators see a **SUSPENDED** marker over that card's head previews and can't open
   or act on them, and backups/share-sweep/probes skip the card until it's resumed.
+  Each card also has an **API** selector (Auto, or a pinned version) showing the version the
+  board detects as, a warning when a pin disagrees with it, and licensed-feature usage on 2.0+
+  cards (hover for per-feature used/limit) — see [Board API versions](#board-api-versions).
 
 ## The partials-only guarantee
 
@@ -204,6 +208,43 @@ A head holds **exactly one capture**, and its lifecycle is closed on both ends:
   assigned to, so such a capture could never be restored and would otherwise sit on the volume
   forever.
 
+## Board API versions
+
+The app speaks **Neuron View API 1.13 and 2.0**, per card, at the same time — a mixed fleet,
+or a card upgraded/downgraded mid-show, needs no rebuild. Each version is a *profile* in
+`server/apiprofiles.js` listing what it changed and how to recognise it.
+
+- **Which version a card uses.** Each card's **API** setting on the Setup tab is **Auto**
+  (default) or a pinned version. Auto detects from `GET /v1/self` (2.0 added `productDate`
+  there) and re-checks every 10 minutes, so a firmware change is picked up on its own. Pin a
+  version only if detection is wrong for a card; the Setup tab flags a pin that disagrees with
+  what the board looks like.
+- **Tolerant reads, shaped writes.** Anything read from a board (previews, snapshot models)
+  accepts every known version's format. Widget writes — input repoint, fullscreen and restore
+  — are shaped for the card's version, touching **only** the known differences; every other
+  field is sent back exactly as the board gave it, so additive API changes round-trip with no
+  code change.
+- **Self-healing.** If an auto-detected card rejects a widget write (400/422), the app
+  re-detects it once and, if the version really changed, resends in the new shape. A pinned
+  card is never second-guessed.
+
+What differs between the profiles today:
+
+| | 1.13 | 2.0 |
+| --- | --- | --- |
+| Colors | `color::rrggbb` | `color::rrggbbaa` (converted both ways; 2.0 → 1.13 drops alpha) |
+| Box `justification` | not accepted — stripped | required — added as `''` (board default) if missing; previews honour it |
+| `GET /v1/misc/licensing` | — | shown per card on the Setup tab |
+
+**Adding a future version:** drop its spec next to the others, diff it against the previous
+one, and append a profile to `server/apiprofiles.js` with a `detect()` signature and any
+changed fields. Only fields this app *writes* (widget bodies) or *interprets* (preview hints)
+need handling; purely additive releases can simply alias the previous profile's shaping.
+
+> The 2.0 spec shows 8-digit colors only as `ffffffff`, so the byte order isn't documented.
+> The app assumes **RRGGBBAA**. If 2.0 previews show wrong hues, flip
+> `COLOR_ALPHA_POSITION` in `server/apiprofiles.js` to `'leading'` (AARRGGBB).
+
 ## Configuration reference
 
 All config is a single JSON file on the Docker volume at `/data/config.json`. No database.
@@ -217,7 +258,7 @@ Top-level keys (all siblings):
 | --- | --- |
 | `admin` | `{ user, passwordHash }` — admin login credential (hashed). See below. |
 | `configVersion` | **Server-managed.** Bumped on every save; used to detect two admin sessions saving over each other. Don't hand-edit it. |
-| `cards` | Array of `{ id, label, ip, suspended? }` — the multiviewer cards. IPs never reach panels. `suspended: true` (absent = active) keeps the card's config but stops all communication with it. |
+| `cards` | Array of `{ id, label, ip, suspended?, apiVersion? }` — the multiviewer cards. IPs never reach panels. `suspended: true` (absent = active) keeps the card's config but stops all communication with it. `apiVersion` (`"1.13"` / `"2.0"`, absent = auto-detect) pins the board API version — see [Board API versions](#board-api-versions). |
 | `panels` | Array of panel definitions (IP, label, layout, assigned heads, grid, group, `allowShowAll`). |
 | `panelGroups` | Ordered array of group names for the admin panel list. |
 | `headFilters` | Map of `"cardId::headUuid"` → allowed snapshot UUIDs. Empty = all allowed. |
@@ -490,7 +531,8 @@ server/
   adminroutes.js  Admin API (/api/admin): login, config, probes, backups, diagnostics
   control.js      Control WebSocket channel (panel reload / admin config-changed)
   tsl.js          TSL UMD v5.0 receiver (UDP/TCP): parses tally, caches names per screen/index
-  board.js        Neuron board client (firmware 1.13); partials-only restore lives here
+  board.js        Neuron board client; partials-only restore lives here; per-card API version
+  apiprofiles.js  Board API version profiles (1.13, 2.0): detection + widget-write shaping
   config.js       JSON-on-volume config store (cached, atomic writes, legacy migration)
   auth.js         Admin login: scrypt hashing, sessions, cookies
   cache.js        TTL cache with in-flight coalescing for hot board reads
@@ -516,7 +558,8 @@ private/
                 as a static file, so there's no static path to bypass the login gate
 config/
   config.example.json   Reference config shape
-api 1-13.yaml           Neuron View API spec, firmware 1.13 (what the boards run)
+api 1-13.yaml           Neuron View API spec 1.13
+api 2-0.yml             Neuron View API spec 2.0 (see "Board API versions")
 REVIEW_NOTES.md         Reviewer context for the fullscreen ("solo") feature — read before
                         judging its capture/delete/recreate design
 Dockerfile

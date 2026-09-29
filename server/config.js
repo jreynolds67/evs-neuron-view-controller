@@ -6,7 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeAtomic, makeWriteChain } from './util.js';
-import { setSuspendedIps } from './board.js';
+import { setSuspendedIps, setApiVersionPins } from './board.js';
 
 const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 
@@ -14,9 +14,11 @@ const CONFIG_PATH = process.env.CONFIG_PATH || '/data/config.json';
 // {
 //   admin: { user, passwordHash },   // server-authoritative; never sent to/accepted from clients
 //   configVersion: 12,               // server-managed optimistic-concurrency token
-//   cards: [ { id: "mv1", label: "MV Card 1", ip: "10.10.60.21", suspended?: true }, ... ],
+//   cards: [ { id: "mv1", label: "MV Card 1", ip: "10.10.60.21", suspended?: true, apiVersion?: "2.0" }, ... ],
 //     // suspended (optional, absent = active): keeps the card's config references alive but
 //     // stops ALL communication with it (see board.js setSuspendedIps / pushDerived).
+//     // apiVersion (optional, absent = auto-detect): pins the board API profile this card is
+//     // spoken to with (see apiprofiles.js / board.js setApiVersionPins).
 //   panels: [
 //     {
 //       ip: "10.10.61.11",           // panels are keyed by their fixed source IP
@@ -45,13 +47,16 @@ function defaultConfig() {
 
 let cache = null;
 
-// Push derived state that OTHER modules cache. Right now that's just the set of suspended card
-// IPs handed to board.js, whose choke point enforces "no communication with a suspended card".
+// Push derived state that OTHER modules cache: the set of suspended card IPs handed to board.js,
+// whose choke point enforces "no communication with a suspended card", and the per-card API
+// version pins that board.js shapes widget writes by.
 // Called from every path that installs a new `cache` (load, save, targeted update) so a
 // suspend/resume applies the instant the config changes — never a stale board contacted after.
 function pushDerived(cfg) {
   const ips = new Set((cfg?.cards || []).filter((c) => c && c.suspended === true && c.ip).map((c) => c.ip));
   setSuspendedIps(ips);
+  const pins = new Map((cfg?.cards || []).filter((c) => c && c.ip && c.apiVersion).map((c) => [c.ip, c.apiVersion]));
+  setApiVersionPins(pins);
 }
 
 // Whether the config in memory actually came from a real file (or a save), rather than the

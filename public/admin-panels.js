@@ -14,6 +14,9 @@ function renderCards() {
       <td><input value="${esc(c.label || '')}" data-i="${i}" data-f="label"></td>
       <td><input value="${esc(c.ip || '')}" data-i="${i}" data-f="ip" placeholder="10.10.60.x"></td>
       <td><input value="${c.tslScreen ?? ''}" data-i="${i}" data-f="tslScreen" inputmode="numeric" placeholder="${i}" title="TSL 5.0 screen index Cerebrum sends for this card. Blank = ${i} (this card's position)."></td>
+      <td><select data-api-pin="${i}" title="Auto = detect from the board. Pin only if detection is wrong for this card.">
+${apiPinOptions(c)}</select>
+        <div class="api-info muted" data-api="${esc(c.id || '')}" style="font-size:11px; margin-top:3px">—</div></td>
       <td><div class="stor" data-stor="${esc(c.id || '')}"><span class="stor-idle muted">—</span></div></td>
       <td class="card-actions">
         <button class="btn sm suspend${c.suspended ? ' on' : ''}" data-susp="${i}"
@@ -34,6 +37,12 @@ function renderCards() {
     toast(nowSuspended
       ? `"${config.cards[i].label || config.cards[i].id}" will be suspended when you Save config.`
       : `"${config.cards[i].label || config.cards[i].id}" will resume when you Save config.`);
+  }));
+  // API pin is a config change like suspend: it applies on Save. Blank = auto-detect.
+  tb.querySelectorAll('[data-api-pin]').forEach((sel) => sel.addEventListener('change', (e) => {
+    const c = config.cards[+e.target.dataset.apiPin];
+    if (e.target.value) c.apiVersion = e.target.value; else delete c.apiVersion;
+    renderApiInfo(c);
   }));
   tb.querySelectorAll('input').forEach((inp) => {
     // Snapshot the id at focus so an id edit can be cascaded from old → new on commit.
@@ -81,6 +90,77 @@ function renderCards() {
   renderHeadFilterCards();
   renderBackupCards(); // backup target dropdown + sweep chips also key off the card list
   loadAllStorage();
+  loadAllApi();
+}
+
+// ---- Card API version + licensing ------------------------------------------
+// Versions come from the server's profile registry so a newly supported API appears here
+// without touching this page. Fetched once; the cards table re-renders when it arrives.
+let apiVersions = [];
+
+function apiPinOptions(c) {
+  const versions = apiVersions.includes(c.apiVersion) || !c.apiVersion
+    ? apiVersions : [...apiVersions, c.apiVersion]; // keep a pin visible even before the list loads
+  return '<option value="">Auto</option>'
+    + versions.map((v) => `<option value="${esc(v)}"${c.apiVersion === v ? ' selected' : ''}>${esc(v)}</option>`).join('');
+}
+
+adminFetch('/api/admin/api-versions', { headers: headers() })
+  .then((r) => r.json())
+  .then((d) => {
+    apiVersions = Array.isArray(d.versions) ? d.versions : [];
+    // Refill the dropdowns in place — a full renderCards() here could race the config load.
+    document.querySelectorAll('[data-api-pin]').forEach((sel) => {
+      const c = config.cards[+sel.dataset.apiPin];
+      if (c) sel.innerHTML = apiPinOptions(c);
+    });
+  })
+  .catch(() => {});
+
+const cardApiState = new Map(); // card id -> last /cards/:id/api response
+
+// Paint one card's API cell from its last probe: what the board detects as, a warning when a
+// pin disagrees with the board, and licensed-feature usage (2.0+) with over-limit flagged.
+function renderApiInfo(c) {
+  const slot = document.querySelector(`[data-api="${cssEsc(c.id || '')}"]`);
+  if (!slot) return;
+  const d = cardApiState.get(c.id);
+  if (c.suspended) { slot.textContent = 'suspended'; return; }
+  if (!c.ip) { slot.textContent = 'no IP'; return; }
+  if (!d) { slot.textContent = '…'; return; }
+  if (!d.ok) { slot.innerHTML = `<span class="stor-err" title="${esc(d.detail || d.error || 'error')}">unreachable</span>`; return; }
+  const parts = [];
+  const board = `board: ${esc(d.detected)}`;
+  // Compared against the page's (possibly unsaved) pin, so the warning tracks the dropdown.
+  if (c.apiVersion && c.apiVersion !== d.detected) {
+    parts.push(`<span class="stor-anom" title="Pinned to ${esc(c.apiVersion)} but the board looks like ${esc(d.detected)}. Widget edits (input repoint, fullscreen) may be rejected. Set Auto unless you know detection is wrong.">⚠ ${board}</span>`);
+  } else {
+    parts.push(`<span title="${esc([d.product, d.productVersion].filter(Boolean).join(' ') || 'Detected from the board')}">${board}</span>`);
+  }
+  const lic = d.licensing;
+  if (lic && lic.supported && Array.isArray(lic.features)) {
+    const over = lic.features.filter((f) => f.limit > 0 && f.used > f.limit);
+    const tip = lic.features.map((f) => `${f.name || '(unnamed)'}: ${f.used}/${f.limit}`).join('\n') || 'No licensed features reported';
+    parts.push(over.length
+      ? `<span class="stor-anom" title="${esc(tip)}">licence over limit (${over.length})</span>`
+      : `<span title="${esc(tip)}">licence: ${lic.features.length} feature${lic.features.length === 1 ? '' : 's'}</span>`);
+  } else if (lic && lic.error) {
+    parts.push(`<span class="stor-err" title="${esc(lic.error)}">licence ?</span>`);
+  }
+  slot.innerHTML = parts.join(' · ');
+}
+
+async function loadAllApi() {
+  for (const c of config.cards) {
+    if (!c.id) continue;
+    renderApiInfo(c);
+    if (c.suspended || !c.ip) continue;
+    try {
+      const r = await adminFetch(`/api/admin/cards/${encodeURIComponent(c.id)}/api`, { headers: headers() });
+      cardApiState.set(c.id, await r.json());
+    } catch (e) { cardApiState.set(c.id, { ok: false, error: e.message }); }
+    renderApiInfo(c);
+  }
 }
 
 // Fetch and render snapshot-storage usage for every card with an IP. The boards report their

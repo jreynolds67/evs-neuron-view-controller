@@ -11,9 +11,10 @@ import {
   loadConfig, saveConfig, updateConfig, getCardById, assignedHeadKeys,
 } from './config.js';
 import {
-  getSelf, getSnapshotInfo, getStorageStatus,
+  getSnapshotInfo, getStorageStatus, getApiInfo, getLicensing,
   getStorageSync, triggerStorageSync, getHeads, normalizeSnapshotEntry,
 } from './board.js';
+import { API_VERSIONS, isKnownVersion } from './apiprofiles.js';
 import { pruneSolo } from './solostore.js';
 import { getEntries, clear as clearLog } from './logger.js';
 import { shareSweepStatus, runShareSweepNow, applyShareSweepConfig } from './sharesweep.js';
@@ -203,6 +204,9 @@ router.put('/config', requireAdmin, async (req, res) => {
   // `suspended` is a real boolean or nothing — coerce truthy to `true` and drop it otherwise, so
   // active cards stay clean in the file and the suspended-IP derivation (config.js) is exact.
   next.cards.forEach((c) => { if (c.suspended === true) c.suspended = true; else delete c.suspended; });
+  // `apiVersion` pins a card's board API profile; anything that isn't a known version (blank,
+  // "auto", a typo in a hand-edited file) means auto-detect and is dropped.
+  next.cards.forEach((c) => { if (!isKnownVersion(c.apiVersion)) delete c.apiVersion; });
   const panelIps = next.panels.map((p) => (p.ip || '').trim()).filter(Boolean);
   const dupIp = panelIps.find((ip, i) => panelIps.indexOf(ip) !== i);
   if (dupIp) return res.status(400).json({ error: `Duplicate panel IP: "${dupIp}". Panel IPs must be unique.` });
@@ -339,12 +343,36 @@ router.get('/cards/:cardId/reach', requireAdmin, async (req, res) => {
   if (!card.ip) return res.json({ ok: false, ip: null, error: 'No IP set for this card' });
   const started = Date.now();
   try {
-    const self = await getSelf(card.ip);
+    const api = await getApiInfo(card.ip);
     res.json({ ok: true, ip: card.ip, durationMs: Date.now() - started,
-      product: self?.app?.productName || null, version: self?.app?.productVersion || null });
+      product: api.product, version: api.productVersion, api });
   } catch (e) {
     res.json({ ok: false, ip: card.ip, durationMs: Date.now() - started,
       error: e.code || e.message, detail: e.detail || null });
+  }
+});
+
+// The board API versions a card can be pinned to (oldest -> newest). Blank/absent = auto.
+router.get('/api-versions', requireAdmin, (_req, res) => {
+  res.json({ versions: API_VERSIONS });
+});
+
+// A card's API version (in effect / pinned / what the board detects as) plus its licensing,
+// for the cards table. Licensing is best-effort: a failed read doesn't hide the version info.
+router.get('/cards/:cardId/api', requireAdmin, async (req, res) => {
+  const config = await loadConfig();
+  const card = getCardById(config, req.params.cardId);
+  if (!card) return res.status(404).json({ error: 'Unknown card' });
+  if (adminCardSuspended(res, card, 'status')) return;
+  if (!card.ip) return res.json({ ok: false, error: 'No IP set for this card' });
+  try {
+    const api = await getApiInfo(card.ip);
+    let licensing = null;
+    try { licensing = await getLicensing(card.ip); }
+    catch (e) { licensing = { supported: true, error: e.code || e.message }; }
+    res.json({ ok: true, ...api, licensing });
+  } catch (e) {
+    res.json({ ok: false, error: e.code || e.message, detail: e.detail || null });
   }
 });
 

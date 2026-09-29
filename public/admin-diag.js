@@ -68,7 +68,8 @@ function renderReachRow() {
       try {
         const res = await adminFetch(`/api/admin/cards/${encodeURIComponent(c.id)}/reach`, { headers: headers() });
         const r = await res.json();
-        if (r.ok) toast(`${c.label}: reachable (${r.product || 'OK'} ${r.version || ''}, ${r.durationMs}ms)`, 'ok');
+        const api = r.api ? ` · API ${r.api.effective}${r.api.source === 'pinned' ? ' (pinned)' : ''}${r.api.mismatch ? ` — board looks like ${r.api.detected}!` : ''}` : '';
+        if (r.ok) toast(`${c.label}: reachable (${r.product || 'OK'} ${r.version || ''}${api}, ${r.durationMs}ms)`, r.api?.mismatch ? 'err' : 'ok');
         else toast(`${c.label}: ${r.error}${r.detail ? ' — ' + r.detail : ''}`, 'err');
       } catch (e) { toast(`${c.label}: ${e.message}`, 'err'); }
       b.textContent = `Test ${c.label || c.id}`;
