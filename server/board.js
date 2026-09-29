@@ -545,16 +545,50 @@ export async function deleteHeadWidget(ip, headUuid, widgetUuid) {
   return boardFetch(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, { method: 'DELETE' });
 }
 
-// Recreate a widget on a head from a captured WidgetGet. The board assigns a NEW uuid (fine —
-// this app never persists widget UUIDs). Body is a WidgetChange (WidgetGet minus uuid).
-export async function createHeadWidget(ip, headUuid, widget) {
-  return writeWidget(ip, `/heads/${headUuid}/widgets`, 'POST', toWidgetChange(widget));
+// Rebuilding a window takes TWO writes: the layout with NO source, then the source on its own.
+// That is exactly what the card's native GUI does (POST with groupUuid "", then PUT the chosen
+// group onto the returned uuid — captured from a 2.0 card, 2026-09-29), and on firmware 2.0 it
+// is the only way that works: a window written with its source already set is STORED correctly
+// (reads back identical) but its video never starts — the card only brings video up when a
+// window's source is ASSIGNED. Snapshot recall and a manual repoint both go through that path,
+// which is why they bring the picture back. The window goes black -> its own source; it never
+// shows a wrong input.
+//
+// `written` is the board's response to the layout write; its uuid is the window to assign
+// (a POST returns the new one) and, when it echoes a full widget, it's what we PUT back —
+// matching the native GUI, which sends the card's own echo.
+async function assignSource(ip, headUuid, written, widget, fallbackUuid = null) {
+  const groupUuid = widget.groupUuid || '';
+  if (!groupUuid) return written; // a window with no source needs nothing more
+  const uuid = isUuid(written?.uuid) ? written.uuid : fallbackUuid;
+  if (!uuid) {
+    const e = new Error('The card created the window but did not return its id, so its source '
+      + 'could not be assigned.');
+    e.status = 502;
+    throw e;
+  }
+  const base = written && Array.isArray(written.elements) ? written : widget;
+  return writeWidget(ip, `/heads/${headUuid}/widgets/${uuid}`, 'PUT',
+    toWidgetChange(base, { groupUuid }));
 }
 
-// PUT a widget's full definition back (keeps its uuid). Used to restore the survivor to its
-// captured original (elements, geometry, border, source) when un-soloing.
+// Recreate a widget on a head from a captured WidgetGet. The board assigns a NEW uuid (fine —
+// this app never persists widget UUIDs). Layout first, source second — see assignSource.
+export async function createHeadWidget(ip, headUuid, widget) {
+  const created = await writeWidget(ip, `/heads/${headUuid}/widgets`, 'POST',
+    toWidgetChange(widget, { groupUuid: '' }));
+  return assignSource(ip, headUuid, created, widget);
+}
+
+// PUT a widget's full definition back. Used to restore the survivor to its captured original
+// (elements, geometry, border, source) when un-soloing. Same two-step as createHeadWidget: the
+// survivor's source never changes, but re-sending an unchanged source does not restart its
+// video on 2.0, and restoring its elements can make the card rebuild the window (it has come
+// back with a new uuid), so it gets its source ASSIGNED like every other rebuilt window.
 export async function setWidgetFull(ip, headUuid, widgetUuid, widget) {
-  return writeWidget(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, 'PUT', toWidgetChange(widget));
+  const written = await writeWidget(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, 'PUT',
+    toWidgetChange(widget, { groupUuid: '' }));
+  return assignSource(ip, headUuid, written, widget, widgetUuid);
 }
 
 // Turn a widget into a full-canvas, VIDEO-ONLY window: geometry to full, keep only its `pip`

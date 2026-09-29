@@ -190,6 +190,11 @@ solo/unsolo endpoints in `server/panelroutes.js`, with the persisted capture in
    Recreated widgets get new UUIDs — fine, because the app never persists widget UUIDs. Ordering
    doesn't matter since these heads never overlap. The delete and recreate board calls run with
    bounded parallelism so a large mosaic restores quickly.
+   Every rebuilt window (recreated or the target) is written in **two steps, like the card's own
+   GUI**: its layout with no source, then its source assigned on its own. On firmware 2.0 a
+   window written with its source already set reads back correctly but its **video never
+   starts** — the card only brings video up when a source is *assigned*. Written in one step,
+   a restored mosaic comes back black, and snapshot recall or a manual repoint "fixes" it.
 
 Because the capture is **persisted on the volume**, a soloed head survives a container redeploy
 and any panel can restore it — the state is the head's, not a browser session's. A **snapshot
