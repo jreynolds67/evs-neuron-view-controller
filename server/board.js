@@ -582,9 +582,10 @@ export async function createHeadWidget(ip, headUuid, widget) {
 
 // PUT a widget's full definition back. Used to restore the survivor to its captured original
 // (elements, geometry, border, source) when un-soloing. Same two-step as createHeadWidget: the
-// survivor's source never changes, but re-sending an unchanged source does not restart its
-// video on 2.0, and restoring its elements can make the card rebuild the window (it has come
-// back with a new uuid), so it gets its source ASSIGNED like every other rebuilt window.
+// survivor's source never changes, but a restore PUT that re-sent it together with the layout
+// came back black at times on 2.0 — the card rebuilds the window (it returns with a new uuid)
+// and the rebuild doesn't start video — so it gets its source ASSIGNED like every other
+// rebuilt window. (A bare re-send of the same source on its own was never tested.)
 export async function setWidgetFull(ip, headUuid, widgetUuid, widget) {
   const written = await writeWidget(ip, `/heads/${headUuid}/widgets/${widgetUuid}`, 'PUT',
     toWidgetChange(widget, { groupUuid: '' }));

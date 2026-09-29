@@ -192,9 +192,13 @@ solo/unsolo endpoints in `server/panelroutes.js`, with the persisted capture in
    bounded parallelism so a large mosaic restores quickly.
    Every rebuilt window (recreated or the target) is written in **two steps, like the card's own
    GUI**: its layout with no source, then its source assigned on its own. On firmware 2.0 a
-   window written with its source already set reads back correctly but its **video never
-   starts** — the card only brings video up when a source is *assigned*. Written in one step,
-   a restored mosaic comes back black, and snapshot recall or a manual repoint "fixes" it.
+   window written with its source already set reads back correctly — UMDs and all — but its
+   **video never starts**; the card only brings video up when a source is *assigned*. Written
+   in one step, a restored mosaic comes back black, and snapshot recall or a manual repoint
+   "fixes" it. This is **not in the API spec** (the widget endpoints are identical in 1.13 and
+   2.0, and `groupUuid` is a normal required field) — it's a firmware behaviour, found by
+   capturing the native GUI's requests. Don't collapse it back into one write. See
+   `REVIEW_NOTES.md` §8.
 
 Because the capture is **persisted on the volume**, a soloed head survives a container redeploy
 and any panel can restore it — the state is the head's, not a browser session's. A **snapshot
@@ -240,6 +244,7 @@ What differs between the profiles today:
 | Colors | `color::rrggbb` | `color::rrggbb` — the spec shows 8 digits, but real 2.0 firmware uses 6 (see below) |
 | Box `justification` | not accepted — stripped | required — added as `''` (board default) if missing; previews honour it |
 | `GET /v1/misc/licensing` | — | shown per card on the Setup tab |
+| Window source on create/restore | taken in the same write | **must be assigned in a separate write** or the video stays black — firmware behaviour, not in the spec; widget writes always do it this way (see [Fullscreen](#fullscreen-solo-a-window)) |
 
 **Adding a future version:** drop its spec next to the others, diff it against the previous
 one, and append a profile to `server/apiprofiles.js` with a `detect()` signature and any

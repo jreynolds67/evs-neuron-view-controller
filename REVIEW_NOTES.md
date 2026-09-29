@@ -33,6 +33,10 @@ None of this is in the API spec; it was all established empirically. If a future
 adds z-order or honors sub-minimum geometry, this whole feature collapses into something
 far simpler and should be rewritten.
 
+**Firmware 2.0 adds one more rule to the restore:** every rebuilt window must be written with
+no source first and have its source assigned in a second write. See §8 before touching
+`createHeadWidget` / `setWidgetFull`.
+
 Recreated widgets get **new UUIDs**, which is safe *only* because this app never persists
 widget UUIDs (heads are bound by UUID; widgets are not). If that ever changes, solo breaks.
 
@@ -195,3 +199,50 @@ weight on the volume. The prune takes the set of still-assigned `<cardId>::<head
 `solostore.js` stays free of a `config.js` import. Note the tradeoff the owner chose knowingly:
 unassigning a head **discards** its capture, so a head unassigned *while soloed* can't be
 recovered by re-assigning it later — recall a snapshot instead.
+
+## 8. Firmware 2.0: a window's source must be assigned separately
+
+**Symptom (2026-09-29, all cards on 2.0):** un-solo put every window back in the right place
+with working UMDs, but most — sometimes all — showed black video. The fullscreen window itself
+always had video. Changing a black window's input and back fixed it; so did a snapshot recall.
+
+**What was ruled out, with evidence:**
+
+- **The restored config.** The head's widget list was read before solo and after a black
+  restore. Once the transparency bug below was fixed, the two were byte-for-byte identical
+  apart from widget UUIDs: same geometry, same `groupUuid`, same elements. The card stored
+  exactly what it had when the video worked.
+- **Transparency / colors.** The first black restore also carried 8-digit colors
+  (`color::36393eff`) — the 2.0 spec shows 8 digits, but real 2.0 cards store and return 6
+  and silently accept 8. That was a real bug (fixed: writes stay on 6 digits), but it is not
+  the black-video cause: the video was still black with correct 6-digit colors, and the UMD
+  boxes sit in a strip below the video element (`y 0.9167`), so they can't cover it.
+
+**Root cause:** a HAR capture of the card's native GUI adding a window shows it **always**
+creates the window with `groupUuid: ""` (POST) and then assigns the source with a separate PUT
+to the returned UUID. It never creates a window with its source already set. Our restore did
+exactly that, in one write. On 2.0 the card stores that source but never starts the window's
+video — the video path (stream, decoder, connection to the window) is only set up when a
+source is *assigned*. UMDs are drawn from stored settings, which is why they came back fine.
+
+**Fix (`server/board.js`, `assignSource`):** `createHeadWidget` POSTs the layout with no source,
+then PUTs the source onto the new UUID. `setWidgetFull` (the survivor) does the same: PUT with
+no source, then assign — the restore PUT makes the card rebuild the survivor (it came back with
+a new UUID, sometimes black), so it takes the UUID from the PUT response. Each window goes
+black → its own source; nothing ever shows a wrong input. **Confirmed fixed on hardware.**
+
+**Not in the spec.** The widget endpoints are identical between the 1.13 and 2.0 specs, and
+`groupUuid` is a required field of `WidgetChange` in both — creating a window with its source
+should work, and did on 1.13. Treat it as a firmware bug worth reporting to EVS; the two-step
+keeps working if they fix it.
+
+**Deliberately rejected / not pursued:**
+
+- *Switching each window to another input and back* ("kick") — it works, but puts a wrong
+  picture on air. Rejected.
+- *Restore with source, then re-punch the same source* — would cost the same two writes per
+  window (the card handles writes one at a time, ~60 ms each), so it can't be faster. Whether a
+  bare same-source re-send even starts the video was **never tested**.
+
+**Untested:** 8-digit colors combined with the two-step write (moot — the app no longer writes
+them), and the bare same-source re-send above.
